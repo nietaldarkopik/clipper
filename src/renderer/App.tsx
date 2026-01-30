@@ -166,6 +166,32 @@ const LibraryTab = ({ setCurrentFilePath, setCurrentVideoId, setActiveTab, setTr
     );
 };
 
+// Timeline Types
+interface Track {
+  id: number;
+  type: 'video' | 'audio' | 'text';
+  name: string;
+}
+
+interface Clip {
+  id: string;
+  trackId: number;
+  name: string;
+  startTime: number;
+  duration: number;
+  offset: number;
+  type: 'video' | 'audio' | 'text';
+  color: string;
+}
+
+interface TimelineState {
+  tracks: Track[];
+  clips: Clip[];
+  zoom: number;
+  playhead: number;
+  selectedClipId: string | null;
+}
+
 const App = () => {
   const [activeTab, setActiveTab] = useState('research'); // research | editor | captions | publish
   const [isPlaying, setIsPlaying] = useState(false);
@@ -194,6 +220,111 @@ const App = () => {
     category: 'Entertainment',
     targetAudience: 'General'
   });
+
+  // Timeline State & History
+  const [history, setHistory] = useState<TimelineState[]>([
+    {
+        tracks: [
+          { id: 1, type: 'video', name: 'Main Video Track' },
+          { id: 2, type: 'audio', name: 'Audio Track' },
+          { id: 3, type: 'text', name: 'Text/Overlay Track' }
+        ],
+        clips: [
+            { id: 'c1', trackId: 1, name: 'opening_hook.mp4', startTime: 0, duration: 5, offset: 0, type: 'video', color: 'bg-indigo-900/40' },
+            { id: 'c2', trackId: 1, name: 'content_main.mp4', startTime: 5, duration: 10, offset: 0, type: 'video', color: 'bg-indigo-900/40' },
+            { id: 'c3', trackId: 2, name: 'lofi_chill_bg.mp3', startTime: 0, duration: 15, offset: 0, type: 'audio', color: 'bg-emerald-900/40' },
+            { id: 'c4', trackId: 3, name: 'Title Overlay', startTime: 2, duration: 3, offset: 0, type: 'text', color: 'bg-orange-900/40' }
+        ],
+        zoom: 20,
+        playhead: 0,
+        selectedClipId: null
+    }
+  ]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+
+  const timeline = history[historyIndex];
+  
+  const updateTimeline = (newState: TimelineState) => {
+      const newHistory = history.slice(0, historyIndex + 1);
+      newHistory.push(newState);
+      setHistory(newHistory);
+      setHistoryIndex(newHistory.length - 1);
+  };
+
+  const handleUndo = () => {
+      if (historyIndex > 0) setHistoryIndex(historyIndex - 1);
+  };
+  
+  const handleRedo = () => {
+      if (historyIndex < history.length - 1) setHistoryIndex(historyIndex + 1);
+  };
+
+  const handleZoom = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const newZoom = parseInt(e.target.value);
+      updateTimeline({ ...timeline, zoom: newZoom });
+  };
+
+  const handleDeleteClip = () => {
+      if (!timeline.selectedClipId) return;
+      const newClips = timeline.clips.filter(c => c.id !== timeline.selectedClipId);
+      updateTimeline({ ...timeline, clips: newClips, selectedClipId: null });
+  };
+
+  const handleSplitClip = () => {
+      if (!timeline.selectedClipId) return;
+      const clip = timeline.clips.find(c => c.id === timeline.selectedClipId);
+      if (!clip) return;
+
+      // Check if playhead is within clip
+      if (timeline.playhead > clip.startTime && timeline.playhead < clip.startTime + clip.duration) {
+          const splitPoint = timeline.playhead - clip.startTime;
+          
+          const leftClip: Clip = {
+              ...clip,
+              id: Date.now().toString() + '_1',
+              duration: splitPoint
+          };
+          
+          const rightClip: Clip = {
+              ...clip,
+              id: Date.now().toString() + '_2',
+              startTime: timeline.playhead,
+              duration: clip.duration - splitPoint,
+              offset: clip.offset + splitPoint
+          };
+          
+          const newClips = timeline.clips.filter(c => c.id !== clip.id).concat([leftClip, rightClip]);
+          updateTimeline({ ...timeline, clips: newClips, selectedClipId: leftClip.id });
+      }
+  };
+  
+  const handleTimelineDrop = (e: React.DragEvent, trackId: number) => {
+      e.preventDefault();
+      const data = e.dataTransfer.getData('application/json');
+      if (!data) return;
+      
+      try {
+          const item = JSON.parse(data);
+          const rect = (e.target as HTMLElement).getBoundingClientRect();
+          const offsetX = e.clientX - rect.left;
+          const startTime = Math.max(0, offsetX / timeline.zoom);
+          
+          const newClip: Clip = {
+              id: Date.now().toString(),
+              trackId: trackId,
+              name: item.name,
+              startTime: startTime,
+              duration: item.duration || 5, // default 5s if unknown
+              offset: 0,
+              type: item.type || (trackId === 2 ? 'audio' : trackId === 3 ? 'text' : 'video'),
+              color: trackId === 2 ? 'bg-emerald-900/40' : trackId === 3 ? 'bg-orange-900/40' : 'bg-indigo-900/40'
+          };
+          
+          updateTimeline({ ...timeline, clips: [...timeline.clips, newClip] });
+      } catch (err) {
+          console.error('Drop error:', err);
+      }
+  };
 
   // Mock Data untuk Library & History
   const [processingList, setProcessingList] = useState<Array<{id: string, name: string, progress: number, status: string, queueName: string}>>([]);
@@ -596,7 +727,20 @@ const App = () => {
                  </h4>
                  <div className="space-y-2">
                     {savedClips.map(clip => (
-                       <div key={clip.id} className="p-2 rounded bg-white/5 border border-white/5 hover:border-indigo-500/30 cursor-pointer flex items-center justify-between group">
+                       <div 
+                          key={clip.id} 
+                          draggable={true}
+                          onDragStart={(e) => {
+                              const parts = clip.duration.split(':').map(Number);
+                              const durationSec = parts.length === 2 ? parts[0] * 60 + parts[1] : 5;
+                              e.dataTransfer.setData('application/json', JSON.stringify({
+                                  name: clip.label,
+                                  duration: durationSec,
+                                  type: 'video'
+                              }));
+                          }}
+                          className="p-2 rounded bg-white/5 border border-white/5 hover:border-indigo-500/30 cursor-grab active:cursor-grabbing flex items-center justify-between group"
+                       >
                           <div className="flex items-center gap-2">
                              <div className="w-8 h-8 bg-slate-800 rounded flex items-center justify-center text-[8px] text-slate-500">MP4</div>
                              <div className="flex flex-col">
@@ -618,22 +762,48 @@ const App = () => {
          <div className="h-10 border-b border-white/5 flex items-center justify-between px-4 bg-[#1a1a1a]">
             <div className="flex items-center gap-4">
                <div className="flex gap-1">
-                  <button className="p-1.5 hover:bg-white/10 rounded-md text-slate-400 hover:text-white transition"><Undo2 size={14}/></button>
-                  <button className="p-1.5 hover:bg-white/10 rounded-md text-slate-400 hover:text-white transition"><Redo2 size={14}/></button>
+                  <button 
+                    onClick={handleUndo} 
+                    disabled={historyIndex <= 0}
+                    className="p-1.5 hover:bg-white/10 rounded-md text-slate-400 hover:text-white transition disabled:opacity-30"
+                  >
+                    <Undo2 size={14}/>
+                  </button>
+                  <button 
+                    onClick={handleRedo} 
+                    disabled={historyIndex >= history.length - 1}
+                    className="p-1.5 hover:bg-white/10 rounded-md text-slate-400 hover:text-white transition disabled:opacity-30"
+                  >
+                    <Redo2 size={14}/>
+                  </button>
                </div>
                <div className="w-px h-4 bg-white/10"></div>
                <div className="flex gap-1">
-                  <button className="px-3 py-1.5 hover:bg-white/10 rounded-md text-slate-400 hover:text-white transition flex items-center gap-2 text-[10px] font-medium">
+                  <button 
+                    onClick={handleSplitClip}
+                    disabled={!timeline.selectedClipId}
+                    className="px-3 py-1.5 hover:bg-white/10 rounded-md text-slate-400 hover:text-white transition flex items-center gap-2 text-[10px] font-medium disabled:opacity-30"
+                  >
                      <Scissors size={14} /> Split
                   </button>
-                  <button className="px-3 py-1.5 hover:bg-white/10 rounded-md text-slate-400 hover:text-white transition flex items-center gap-2 text-[10px] font-medium">
+                  <button 
+                    onClick={handleDeleteClip}
+                    disabled={!timeline.selectedClipId}
+                    className="px-3 py-1.5 hover:bg-white/10 rounded-md text-slate-400 hover:text-white transition flex items-center gap-2 text-[10px] font-medium disabled:opacity-30"
+                  >
                      <Trash2 size={14} /> Delete
                   </button>
                </div>
             </div>
             <div className="flex items-center gap-3">
                <ZoomOut size={14} className="text-slate-500" />
-               <input type="range" className="w-24 h-1 bg-white/10 rounded-full appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2 [&::-webkit-slider-thumb]:h-2 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-slate-400" />
+               <input 
+                  type="range" 
+                  min="5" max="100" step="5"
+                  value={timeline.zoom}
+                  onChange={handleZoom}
+                  className="w-24 h-1 bg-white/10 rounded-full appearance-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2 [&::-webkit-slider-thumb]:h-2 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-slate-400" 
+               />
                <ZoomIn size={14} className="text-slate-500" />
             </div>
          </div>
@@ -641,76 +811,63 @@ const App = () => {
          {/* Timeline Area */}
          <div className="flex-1 relative overflow-hidden bg-[#0f0f0f] flex flex-col group">
             {/* Time Ruler */}
-            <div className="h-6 border-b border-white/5 flex items-end px-4 text-[9px] text-slate-600 font-mono select-none bg-[#141414]">
-               <div className="flex-1 flex justify-between px-2">
-                  <span>00:00</span>
-                  <span>00:05</span>
-                  <span>00:10</span>
-                  <span>00:15</span>
-                  <span>00:20</span>
-                  <span>00:25</span>
-                  <span>00:30</span>
-                  <span>00:35</span>
-                  <span>00:40</span>
+            <div className="h-6 border-b border-white/5 flex items-end px-4 text-[9px] text-slate-600 font-mono select-none bg-[#141414] overflow-hidden">
+               <div className="flex-1 relative h-full">
+                  {[...Array(20)].map((_, i) => (
+                      <span key={i} className="absolute bottom-0 text-[8px]" style={{ left: i * 5 * timeline.zoom }}>
+                          {formatTime(i * 5)}
+                      </span>
+                  ))}
                </div>
             </div>
 
             {/* Tracks Container */}
-            <div className="flex-1 p-4 space-y-1 overflow-y-auto">
+            <div className="flex-1 p-4 space-y-1 overflow-y-auto relative">
                
-               {/* Main Video Track */}
-               <div className="h-16 relative group flex">
-                  <div className="w-full bg-white/5 rounded-lg border border-white/5 flex overflow-hidden relative">
-                     {/* Clip 1 */}
-                     <div className="w-[35%] bg-indigo-900/40 border-r border-indigo-500/30 flex flex-col justify-between p-1 relative group/clip cursor-pointer hover:bg-indigo-900/60 transition">
-                        <div className="flex items-center gap-2 text-[10px] text-indigo-200 font-medium truncate">
-                           <Video size={10} className="text-indigo-400"/> opening_hook.mp4
-                        </div>
-                        <div className="h-full w-full absolute inset-0 opacity-20 bg-[url('https://grainy-gradients.vercel.app/noise.svg')]"></div>
-                        <div className="w-full h-6 flex gap-0.5 opacity-30 overflow-hidden">
-                           {[...Array(10)].map((_,i) => <div key={i} className="flex-1 bg-indigo-400 rounded-sm h-full"></div>)}
-                        </div>
-                     </div>
-                     {/* Clip 2 */}
-                     <div className="w-[45%] bg-indigo-900/40 border-r border-indigo-500/30 flex flex-col justify-between p-1 relative group/clip cursor-pointer hover:bg-indigo-900/60 transition">
-                        <div className="flex items-center gap-2 text-[10px] text-indigo-200 font-medium truncate">
-                           <Video size={10} className="text-indigo-400"/> content_main.mp4
-                        </div>
-                         <div className="h-full w-full absolute inset-0 opacity-20 bg-[url('https://grainy-gradients.vercel.app/noise.svg')]"></div>
-                        <div className="w-full h-6 flex gap-0.5 opacity-30 overflow-hidden">
-                           {[...Array(15)].map((_,i) => <div key={i} className="flex-1 bg-indigo-400 rounded-sm h-full"></div>)}
-                        </div>
-                     </div>
-                  </div>
-               </div>
-
-               {/* Audio Track */}
-               <div className="h-8 relative mt-1 w-full">
-                   <div className="w-full h-full bg-[#1a1a1a] rounded-lg border border-white/5 relative overflow-hidden">
-                       <div className="absolute left-[0%] w-[80%] h-full bg-emerald-900/40 border border-emerald-500/30 rounded flex items-center px-2 text-[9px] text-emerald-300">
-                          <Music size={10} className="mr-2 text-emerald-400"/> 
-                          <span className="truncate">lofi_chill_bg.mp3</span>
-                          {/* Waveform simulation */}
-                          <div className="flex items-center gap-0.5 ml-auto opacity-50 h-3 w-full justify-end overflow-hidden">
-                             {[...Array(40)].map((_,i) => <div key={i} className="w-0.5 bg-emerald-400 rounded-full" style={{height: Math.random()*100 + '%'}}></div>)}
-                          </div>
-                       </div>
+               {timeline.tracks.map(track => (
+                   <div 
+                        key={track.id} 
+                        className="h-16 relative group flex mt-2"
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={(e) => handleTimelineDrop(e, track.id)}
+                   >
+                      <div className="w-full bg-white/5 rounded-lg border border-white/5 flex overflow-hidden relative">
+                         <div className="absolute left-2 top-1 text-[9px] text-slate-500 z-10 pointer-events-none">{track.name}</div>
+                         
+                         {timeline.clips.filter(c => c.trackId === track.id).map(clip => (
+                             <div 
+                                key={clip.id}
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    updateTimeline({ ...timeline, selectedClipId: clip.id });
+                                }}
+                                className={`absolute h-[80%] top-[10%] rounded flex flex-col justify-center px-2 cursor-pointer transition border ${
+                                    timeline.selectedClipId === clip.id ? 'border-yellow-400 z-20 ring-2 ring-yellow-400/30' : 'border-white/10 hover:border-white/30'
+                                } ${clip.color || 'bg-indigo-900/40'}`}
+                                style={{
+                                    left: clip.startTime * timeline.zoom,
+                                    width: clip.duration * timeline.zoom
+                                }}
+                             >
+                                <div className="flex items-center gap-2 text-[10px] text-slate-200 font-medium truncate">
+                                   {track.type === 'video' && <Video size={10} />}
+                                   {track.type === 'audio' && <Music size={10} />}
+                                   {track.type === 'text' && <Type size={10} />}
+                                   {clip.name}
+                                </div>
+                             </div>
+                         ))}
+                      </div>
                    </div>
-               </div>
-               
-               {/* Text/Overlay Track */}
-               <div className="h-6 relative mt-1 w-full">
-                   <div className="w-full h-full bg-[#1a1a1a] rounded-lg border border-white/5 relative overflow-hidden">
-                       <div className="absolute left-[5%] w-[20%] h-full bg-orange-900/40 border border-orange-500/30 rounded flex items-center px-2 text-[9px] text-orange-300">
-                          <Type size={10} className="mr-2 text-orange-400"/> Title Overlay
-                       </div>
-                   </div>
-               </div>
+               ))}
 
             </div>
 
             {/* Playhead */}
-            <div className="absolute top-0 bottom-0 left-[35%] w-px bg-white z-30 pointer-events-none group-hover:bg-yellow-400">
+            <div 
+                className="absolute top-0 bottom-0 w-px bg-white z-30 pointer-events-none group-hover:bg-yellow-400"
+                style={{ left: (timeline.playhead * timeline.zoom) + 16 /* padding offset */ }}
+            >
                <div className="absolute -top-0 -left-1.5 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[8px] border-t-white"></div>
                <div className="absolute top-0 left-0 w-px h-full bg-white shadow-[0_0_10px_rgba(255,255,255,0.5)]"></div>
             </div>

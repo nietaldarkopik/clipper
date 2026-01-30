@@ -1,5 +1,13 @@
 import { app, BrowserWindow } from 'electron';
 import path from 'path';
+import { File } from 'buffer';
+
+// Polyfill File for undici/openai in Node 18 environment (Electron Main Process)
+if (typeof global.File === 'undefined') {
+  // @ts-ignore
+  global.File = File;
+}
+
 import { startServer } from '../backend/server';
 
 function createWindow() {
