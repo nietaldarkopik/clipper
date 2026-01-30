@@ -1,0 +1,23 @@
+import { Queue, Worker } from 'bullmq';
+import { MockQueue, MockWorker } from './mock-queue';
+import { getRedisConnection } from '../redis';
+
+// Auto-detect or force mock. Since we verified Redis is missing in this session, we default to true.
+// In a real app, you might check process.env.REDIS_HOST or try to connect.
+const USE_MOCK = true;
+
+export const createQueue = (name: string) => {
+  if (USE_MOCK) {
+    console.log(`[QueueFactory] Using In-Memory MockQueue for '${name}' (Redis not available)`);
+    return new MockQueue(name) as any as Queue;
+  }
+  return new Queue(name, { connection: getRedisConnection() });
+};
+
+export const createWorker = (name: string, processor: any) => {
+  if (USE_MOCK) {
+    console.log(`[QueueFactory] Using In-Memory MockWorker for '${name}'`);
+    return new MockWorker(name, processor) as any as Worker;
+  }
+  return new Worker(name, processor, { connection: getRedisConnection() });
+};

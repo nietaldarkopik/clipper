@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.main.json",
+  "compilerOptions": {
+    "outDir": "dist/backend"
+  },
+  "include": ["src/backend"]
+}

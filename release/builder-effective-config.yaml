@@ -1,0 +1,20 @@
+directories:
+  output: release
+  buildResources: build
+appId: com.clipper.app
+productName: Clipper AI
+files:
+  - filter:
+      - dist/**/*
+      - package.json
+asarUnpack:
+  - '**/node_modules/ffmpeg-static/**/*'
+  - '**/node_modules/yt-dlp-exec/**/*'
+  - '**/node_modules/ffprobe-static/**/*'
+win:
+  target: nsis
+mac:
+  target: dmg
+linux:
+  target: AppImage
+electronVersion: 28.3.3
