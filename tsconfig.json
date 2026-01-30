@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "noEmit": true,
+    "jsx": "react-jsx"
+  },
+  "include": ["src/renderer"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}
