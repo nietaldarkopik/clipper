@@ -14,6 +14,10 @@ import projectRoutes from './routes/projects';
 
 const fastify = Fastify({ logger: true });
 
+fastify.addHook('onRequest', async (request, reply) => {
+  console.log(`[REQUEST] ${request.method} ${request.url}`);
+});
+
 fastify.register(cors, {
   origin: true
 });
