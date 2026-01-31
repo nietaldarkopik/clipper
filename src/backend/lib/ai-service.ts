@@ -63,11 +63,13 @@ export class LocalWhisperService implements AIService {
         try {
             // Strategy 1: Transformers.js (Node-native, no Python required)
             // Dynamically import to avoid load-time errors if not installed
+            console.log('[LocalWhisper] Trying Strategy 1: Transformers.js');
             return await this.transcribeWithTransformers(filePath, modelSize, onProgress, onPartial);
         } catch (e: any) {
             console.error('[LocalWhisper] Transformers.js failed:', e);
             console.log('[LocalWhisper] Falling back to Python Whisper CLI...');
             // Strategy 2: Python Whisper CLI
+            console.log('[LocalWhisper] Trying Strategy 2: Python Whisper CLI');
             return this.transcribeWithPythonWhisper(filePath, modelSize, onProgress, onPartial);
         }
     }

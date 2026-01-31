@@ -357,19 +357,28 @@ export const startWorkers = () => {
 
       try {
           // 1. Extract Audio
-          console.log(`[Analyze] Extracting audio for ${id}...`);
+          console.log(`[Analyze] Extracting audio for ${id} from ${inputPath}...`);
           await new Promise((resolve, reject) => {
               ffmpeg(inputPath)
                   .toFormat('wav')
                   .outputOptions('-y') // Force overwrite if exists
+                  .on('start', (commandLine) => {
+                      console.log('[Analyze] FFmpeg process started:', commandLine);
+                  })
                   .on('progress', (progress) => {
                       // Map extraction to 0-30%
                       if (progress.percent) {
                           job.updateProgress(Math.min(30, Math.round(progress.percent * 0.3)));
                       }
                   })
-                  .on('end', resolve)
-                  .on('error', reject)
+                  .on('end', () => {
+                      console.log(`[Analyze] Audio extraction completed: ${audioPath}`);
+                      resolve(undefined);
+                  })
+                  .on('error', (err) => {
+                      console.error(`[Analyze] FFmpeg error:`, err);
+                      reject(err);
+                  })
                   .save(audioPath);
           });
 
@@ -484,8 +493,21 @@ export const startWorkers = () => {
           console.log(`[Analyze] Completed for ${id}`);
           return { transcript: transcriptData, transcriptPath };
 
-      } catch (error) {
+      } catch (error: any) {
           console.error(`[Analyze] Error analyzing ${id}:`, error);
+          
+          try {
+            saveJob({
+              id: job.id || `${id}_analyze`,
+              type: 'analyze',
+              status: 'failed',
+              progress: 0,
+              result: { error: error.message || String(error) }
+            });
+          } catch (dbErr) {
+            console.error('[DB] Failed to save error status', dbErr);
+          }
+
           throw error;
       }
   });

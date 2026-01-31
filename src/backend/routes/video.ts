@@ -136,12 +136,21 @@ export default async function videoRoutes(fastify: FastifyInstance) {
   // POST /video/analyze
   fastify.post('/video/analyze', async (request, reply) => {
     const { id, modelSize, method } = request.body as { id: string, modelSize?: string, method?: 'youtube' | 'whisper' };
+    
+    console.log(`[API] /video/analyze request received: id=${id}, modelSize=${modelSize}, method=${method}`);
+    
     if (!id) {
         return reply.code(400).send({ error: 'Video ID is required' });
     }
 
-    const job = await analyzeQueue.add('analyze-video', { id, modelSize, method });
-    return { status: 'queued', jobId: job.id, message: 'Analysis started' };
+    try {
+        const job = await analyzeQueue.add('analyze-video', { id, modelSize, method });
+        console.log(`[API] Analysis job queued: jobId=${job.id}`);
+        return { status: 'queued', jobId: job.id, message: 'Analysis started' };
+    } catch (error) {
+        console.error(`[API] Failed to queue analysis job:`, error);
+        return reply.code(500).send({ error: 'Failed to start analysis' });
+    }
   });
 
   // POST /editor/clip
