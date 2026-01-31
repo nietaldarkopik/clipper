@@ -2,7 +2,7 @@ import { Job } from 'bullmq';
 import { createWorker } from './lib/queue-factory';
 import path from 'path';
 import fs from 'fs-extra';
-import ytDlp from 'yt-dlp-exec';
+import { exec as ytDlpExec } from 'yt-dlp-exec';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
 import crypto from 'crypto';
@@ -25,24 +25,141 @@ fs.ensureDirSync(downloadsDir);
 fs.ensureDirSync(processedDir);
 fs.ensureDirSync(transcriptsDir);
 
+// Map to track active download processes
+const activeDownloads = new Map<string, any>();
+
+export const cancelDownloadJob = (jobId: string) => {
+    const subprocess = activeDownloads.get(jobId);
+    if (subprocess) {
+        console.log(`[Worker] Killing process for job ${jobId}`);
+        subprocess.kill('SIGKILL'); // Force kill
+        activeDownloads.delete(jobId);
+        return true;
+    }
+    return false;
+};
+
 export const startWorkers = () => {
   const downloadWorker = createWorker('download', async (job: Job) => {
-    const { url, id } = job.data;
-    console.log(`[Download] Starting ${url}`);
+    const { url, id, downloadSubtitles } = job.data;
+    console.log(`[Download] Starting ${url} (Subtitles: ${downloadSubtitles})`);
     
     try {
       const outputTemplate = path.join(downloadsDir, `${id}.%(ext)s`);
       
-      await ytDlp(url, {
-        output: outputTemplate,
-        format: 'mp4',
-        noCheckCertificate: true,
-        noWarnings: true,
-        preferFreeFormats: true,
+      const ytDlpOptions: any = {
+          output: outputTemplate,
+          format: 'mp4',
+          noCheckCertificate: true,
+          noWarnings: true,
+          preferFreeFormats: true,
+          writeInfoJson: true,
+      };
+
+      if (downloadSubtitles) {
+          ytDlpOptions.writeSub = true;
+          ytDlpOptions.writeAutoSub = true;
+          ytDlpOptions.subFormat = 'json3';
+      }
+
+      // Use exec to get progress events
+      await new Promise<void>((resolve, reject) => {
+        const subprocess = ytDlpExec(url, ytDlpOptions);
+
+        // Track process
+        activeDownloads.set(id, subprocess);
+
+        let lastUpdate = 0;
+        let buffer = '';
+        let errorBuffer = '';
+        
+        const handleOutput = (data: Buffer) => {
+            buffer += data.toString();
+            // ... (existing logic for stdout)
+            const lines = buffer.split(/[\r\n]+/);
+            buffer = lines.pop() || ''; 
+            for (const line of lines) {
+                const match = line.match(/\[download\]\s+(\d+\.?\d*)%/);
+                if (match) {
+                    const percent = parseFloat(match[1]);
+                    job.updateProgress(percent);
+                    const now = Date.now();
+                    if (now - lastUpdate > 1000) {
+                        saveVideo({ id, status: 'downloading', progress: percent });
+                        lastUpdate = now;
+                    }
+                }
+            }
+        };
+
+        const handleError = (data: Buffer) => {
+            const chunk = data.toString();
+            errorBuffer += chunk;
+            console.error(`[yt-dlp ${id}] stderr:`, chunk);
+            // Also process progress from stderr as yt-dlp sometimes writes progress there
+            handleOutput(data); 
+        };
+
+        subprocess.stdout?.on('data', handleOutput);
+        subprocess.stderr?.on('data', handleError);
+
+        subprocess.on('close', (code: number) => {
+          activeDownloads.delete(id);
+          if (code === 0) resolve();
+          else reject(new Error(`yt-dlp exited with code ${code}. Stderr: ${errorBuffer}`));
+        });
+
+        subprocess.on('error', (err: any) => {
+            activeDownloads.delete(id);
+            reject(err);
+        });
       });
       
       console.log(`[Download] Completed ${id}`);
       const filePath = path.join(downloadsDir, `${id}.mp4`);
+      const infoJsonPath = path.join(downloadsDir, `${id}.info.json`);
+
+      // Read metadata from info.json
+      let metadata: any = { title: `Video ${id}` };
+      try {
+        if (fs.existsSync(infoJsonPath)) {
+            const info = fs.readJsonSync(infoJsonPath);
+            metadata = {
+                title: info.title,
+                description: info.description,
+                uploader: info.uploader,
+                duration: info.duration,
+                view_count: info.view_count,
+                like_count: info.like_count,
+                thumbnail: info.thumbnail,
+                webpage_url: info.webpage_url,
+                upload_date: info.upload_date,
+                tags: info.tags
+            };
+        }
+      } catch (e) {
+          console.warn('Failed to read info.json', e);
+      }
+
+      // Check for transcripts (yt-dlp names them like id.en.json3)
+      try {
+          const files = fs.readdirSync(downloadsDir);
+          const transcriptFile = files.find(f => f.startsWith(id) && f.endsWith('.json3'));
+          if (transcriptFile) {
+              const tContent = fs.readJsonSync(path.join(downloadsDir, transcriptFile));
+              // Convert json3 to simpler format if needed, or store as is
+              // Json3 usually has 'events' array
+              saveTranscript({
+                  id: crypto.randomUUID(),
+                  video_id: id,
+                  type: 'youtube',
+                  content: tContent,
+                  created_at: new Date().toISOString()
+              });
+          }
+      } catch (e) {
+          console.warn('Failed to process transcripts', e);
+      }
 
       // Save Video Metadata to DB
       try {
@@ -51,8 +168,10 @@ export const startWorkers = () => {
           url,
           filepath: filePath,
           source: 'youtube',
-          title: `Video ${id}`,
-          created_at: new Date().toISOString()
+          ...metadata,
+          created_at: new Date().toISOString(),
+          status: 'completed',
+          progress: 100
         });
         saveJob({
           id: job.id || id,
@@ -68,6 +187,10 @@ export const startWorkers = () => {
       return { status: 'completed', filePath };
     } catch (error: any) {
       console.error(`[Download] Failed ${id}`, error);
+      // Update status to failed
+      try {
+          saveVideo({ id, status: 'failed', progress: 0 });
+      } catch (e) {}
       throw error;
     }
   });
@@ -77,6 +200,70 @@ export const startWorkers = () => {
   });
 
   const processWorker = createWorker('process', async (job: Job) => {
+    if (job.name === 'merge-clips') {
+        const { clipIds, projectId, outputName } = job.data;
+        console.log(`[Process] Merging clips: ${clipIds.join(', ')}`);
+        
+        // We need to find the file paths for these clips
+        // Assuming clipIds are IDs of clips in DB which have filepath
+        // But for simplicity, let's assume clipIds are actually file paths or we look them up.
+        // Wait, the frontend might pass file paths directly or IDs.
+        // Best to pass IDs and lookup in DB. But DB lookup is synchronous/async.
+        // Let's assume the caller resolves paths or we do it here.
+        // Since we don't have easy DB access inside worker (we do have saveClip etc but not getClip),
+        // let's pass file paths in job data for now to avoid DB dependency issues in worker if not setup.
+        // Actually we import { saveVideo } from ./lib/db. We can import { getClip } if it exists.
+        // Let's check db.ts later. For now, let's assume job.data has filePaths.
+        
+        const { filePaths } = job.data as { filePaths: string[], projectId: string, outputName: string };
+        
+        if (!filePaths || filePaths.length === 0) {
+            throw new Error("No files to merge");
+        }
+
+        const outputPath = path.join(processedDir, `${projectId}_${outputName || 'merged'}_${Date.now()}.mp4`);
+        const listPath = path.join(processedDir, `${projectId}_merge_list_${Date.now()}.txt`);
+        
+        // Create ffmpeg concat list file
+        // file '/path/to/file1.mp4'
+        // file '/path/to/file2.mp4'
+        const listContent = filePaths.map(p => `file '${p.replace(/\\/g, '/')}'`).join('\n');
+        await fs.writeFile(listPath, listContent);
+        
+        return new Promise((resolve, reject) => {
+            ffmpeg()
+                .input(listPath)
+                .inputOptions(['-f', 'concat', '-safe', '0'])
+                .outputOptions('-c', 'copy')
+                .save(outputPath)
+                .on('end', async () => {
+                    console.log(`[Process] Merge completed: ${outputPath}`);
+                    await fs.unlink(listPath); // Cleanup list file
+                    
+                    // Save result as a new video in project
+                    if (projectId) {
+                        saveVideo({
+                            id: crypto.randomUUID(),
+                            project_id: projectId,
+                            url: outputPath,
+                            filepath: outputPath,
+                            source: 'merge',
+                            title: outputName || 'Merged Video',
+                            created_at: new Date().toISOString(),
+                            status: 'completed',
+                            progress: 100
+                        });
+                    }
+                    
+                    resolve({ filePath: outputPath });
+                })
+                .on('error', (err) => {
+                    console.error('[Process] Merge error:', err);
+                    reject(err);
+                });
+        });
+    }
+
     const { id, startTime, duration } = job.data;
     console.log(`[Process] Clipping ${id} from ${startTime} for ${duration}s`);
     
@@ -139,8 +326,8 @@ export const startWorkers = () => {
   });
 
   const analyzeWorker = createWorker('analyze', async (job: Job) => {
-      const { id } = job.data;
-      console.log(`[Analyze] Starting analysis for ${id}`);
+      const { id, modelSize, method } = job.data;
+      console.log(`[Analyze] Starting analysis for ${id} with model ${modelSize || 'tiny'}`);
       job.updateProgress(1);
       
       const files = await fs.readdir(downloadsDir);
@@ -191,53 +378,111 @@ export const startWorkers = () => {
           job.updateProgress(30);
           
           let transcriptData: any;
-          // Check if transcript already exists to save time/cost
-          if (fs.existsSync(transcriptPath)) {
-               transcriptData = await fs.readJson(transcriptPath);
-               console.log(`[Analyze] Using cached transcript for ${id}`);
+          
+          if (method === 'youtube') {
+              // Fetch video URL
+              const video = getVideo(id);
+              if (!video || !video.url) {
+                  throw new Error("Video URL not found for YouTube subtitle download");
+              }
+
+              console.log(`[Analyze] Downloading subtitles from YouTube for ${id}...`);
+              
+              const outputTemplate = path.join(downloadsDir, `${id}.%(ext)s`);
+              const ytDlpOptions: any = {
+                  output: outputTemplate,
+                  skipDownload: true,
+                  writeSub: true,
+                  writeAutoSub: true,
+                  subFormat: 'json3',
+                  noCheckCertificate: true,
+                  noWarnings: true,
+                  preferFreeFormats: true,
+              };
+
+              await ytDlpExec(video.url, ytDlpOptions);
+
+              // Find the subtitle file
+              const files = fs.readdirSync(downloadsDir);
+              const transcriptFile = files.find(f => f.startsWith(id) && f.endsWith('.json3'));
+              
+              if (!transcriptFile) {
+                  throw new Error("YouTube subtitles not found after download attempt");
+              }
+
+              const tContent = await fs.readJson(path.join(downloadsDir, transcriptFile));
+              
+              // Extract text from json3 events
+              let fullText = '';
+              if (tContent.events) {
+                  fullText = tContent.events
+                      .filter((e: any) => e.segs)
+                      .map((e: any) => e.segs.map((s: any) => s.utf8).join(''))
+                      .join(' ');
+              }
+
+              transcriptData = {
+                  text: fullText,
+                  raw: tContent,
+                  source: 'youtube'
+              };
+              
           } else {
-               transcriptData = await aiService.transcribeAudio(audioPath, (progress) => {
-                   // Map transcription progress to 30-80% range (50% of total)
-                   const mappedProgress = 30 + Math.round(progress * 0.5);
-                   job.updateProgress(mappedProgress);
-               });
-               await fs.writeJson(transcriptPath, { ...transcriptData, videoId: id, createdAt: new Date() });
+              // Whisper logic
+              // Check if transcript already exists to save time/cost
+              // If modelSize is explicitly provided (via prompt) OR method is 'whisper', we treat it as a fresh run request if user initiated it.
+              // Ideally, we should check if the existing transcript is good enough, but for now, 
+              // if the user explicitly requested 'whisper' or 'modelSize', we re-run ONLY if forced.
+              // Actually, simpler logic: If transcript exists AND modelSize is NOT provided (auto-mode), use cache.
+              // If modelSize IS provided, it means user manually triggered it with a choice, so we re-run.
+              
+              const shouldTranscribe = !fs.existsSync(transcriptPath) || !!modelSize;
+
+              if (!shouldTranscribe) {
+                    transcriptData = await fs.readJson(transcriptPath);
+                    console.log(`[Analyze] Using cached transcript for ${id}`);
+               } else {
+                    let accumulatedText = '';
+                    transcriptData = await aiService.transcribeAudio(audioPath, modelSize, (progress) => {
+                        // Map transcription progress to 30-80% range (50% of total)
+                        const mappedProgress = 30 + Math.round(progress * 0.5);
+                        job.updateProgress(mappedProgress);
+                    }, async (partialText) => {
+                        accumulatedText += partialText + ' ';
+                        // Update job data for frontend streaming
+                        // We throttle updates slightly if needed, but for now direct update
+                        await job.update({ ...job.data, partialTranscript: accumulatedText });
+                    });
+                    await fs.writeJson(transcriptPath, { ...transcriptData, videoId: id, createdAt: new Date() }, { spaces: 2 });
+               }
           }
           
           const transcriptText = transcriptData.text;
-          job.updateProgress(80);
-
-          // 3. Analyze with LLM
-          console.log(`[Analyze] Finding highlights for ${id}...`);
-          const highlights = await aiService.getHighlightsFromTranscript(transcriptText);
-          
-          job.updateProgress(90);
-
-          // Cleanup audio file
-          if (fs.existsSync(audioPath)) {
-              await fs.unlink(audioPath);
-          }
+          job.updateProgress(100);
 
           // Save Transcript to DB
           try {
             saveTranscript({
               id: crypto.randomUUID(),
               video_id: id,
-              content: transcriptData
+              type: 'whisper',
+              content: transcriptData,
+              created_at: new Date().toISOString()
             });
+
             saveJob({
               id: job.id || `${id}_analyze`,
               type: 'analyze',
               status: 'completed',
               progress: 100,
-              result: { transcript: transcriptData, highlights }
+              result: { transcript: transcriptData }
             });
           } catch (dbErr) {
             console.error('[DB] Failed to save transcript data', dbErr);
           }
 
-          console.log(`[Analyze] Completed for ${id}`, highlights);
-          return { transcript: transcriptData, highlights, transcriptPath };
+          console.log(`[Analyze] Completed for ${id}`);
+          return { transcript: transcriptData, transcriptPath };
 
       } catch (error) {
           console.error(`[Analyze] Error analyzing ${id}:`, error);

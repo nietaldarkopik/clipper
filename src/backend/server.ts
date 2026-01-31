@@ -7,6 +7,8 @@ import videoRoutes from './routes/video';
 import libraryRoutes from './routes/library';
 import researchRoutes from './routes/research';
 import aiRoutes from './routes/ai';
+import channelsRoutes from './routes/channels';
+import projectRoutes from './routes/projects';
 
 const fastify = Fastify({ logger: true });
 
@@ -15,10 +17,13 @@ fastify.register(cors, {
 });
 
 // Register Routes
+// Force reload
 fastify.register(videoRoutes);
 fastify.register(libraryRoutes);
 fastify.register(researchRoutes);
 fastify.register(aiRoutes);
+fastify.register(channelsRoutes);
+fastify.register(projectRoutes);
 
 fastify.get('/', async (_request, _reply) => {
   return { status: 'ok', message: 'Video Clipper Backend Running' };
@@ -33,6 +38,7 @@ export const startServer = async () => {
     startWorkers();
 
     await fastify.listen({ port: 3000 });
+    // Backend server listening
     console.log('Backend server listening on port 3000');
   } catch (err) {
     fastify.log.error(err);

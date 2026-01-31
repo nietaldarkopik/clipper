@@ -15,7 +15,7 @@ if (ffmpegPath) {
 }
 
 export interface AIMetadata {
-  title: string;
+  titles: string[];
   description: string;
   hashtags: string[];
   category: string;
@@ -23,8 +23,11 @@ export interface AIMetadata {
 
 export interface AIService {
   generateMetadata(context: string): Promise<AIMetadata>;
-  transcribeAudio(filePath: string, onProgress?: (progress: number) => void): Promise<any>;
+  transcribeAudio(filePath: string, modelSize?: string, onProgress?: (progress: number) => void, onPartial?: (text: string) => void): Promise<any>;
   getHighlightsFromTranscript(transcript: string): Promise<any[]>;
+  generateSummary(transcript: string): Promise<string>;
+  generateScript(summary: string, style?: string): Promise<string>;
+  generateSpeech(text: string, voice?: string): Promise<Buffer>;
 }
 
 export class LocalWhisperService implements AIService {
@@ -42,18 +45,30 @@ export class LocalWhisperService implements AIService {
         return this.openAI.getHighlightsFromTranscript(transcript);
     }
 
-    async transcribeAudio(filePath: string, onProgress?: (progress: number) => void): Promise<any> {
-        console.log(`[LocalWhisper] Starting transcription for ${filePath}`);
+    async generateSummary(transcript: string): Promise<string> {
+        return this.openAI.generateSummary(transcript);
+    }
+
+    async generateScript(summary: string, style?: string): Promise<string> {
+        return this.openAI.generateScript(summary, style);
+    }
+
+    async generateSpeech(text: string, voice?: string): Promise<Buffer> {
+        return this.openAI.generateSpeech(text, voice);
+    }
+
+    async transcribeAudio(filePath: string, modelSize: string = 'tiny', onProgress?: (progress: number) => void, onPartial?: (text: string) => void): Promise<any> {
+        console.log(`[LocalWhisper] Starting transcription for ${filePath} with model ${modelSize}`);
         
         try {
             // Strategy 1: Transformers.js (Node-native, no Python required)
             // Dynamically import to avoid load-time errors if not installed
-            return await this.transcribeWithTransformers(filePath, onProgress);
+            return await this.transcribeWithTransformers(filePath, modelSize, onProgress, onPartial);
         } catch (e: any) {
             console.error('[LocalWhisper] Transformers.js failed:', e);
             console.log('[LocalWhisper] Falling back to Python Whisper CLI...');
             // Strategy 2: Python Whisper CLI
-            return this.transcribeWithPythonWhisper(filePath, onProgress);
+            return this.transcribeWithPythonWhisper(filePath, modelSize, onProgress, onPartial);
         }
     }
 
@@ -81,69 +96,53 @@ export class LocalWhisperService implements AIService {
         });
     }
 
-    private async transcribeWithTransformers(filePath: string, onProgress?: (progress: number) => void): Promise<any> {
-        console.log('[LocalWhisper] Attempting to use @xenova/transformers...');
+    private async transcribeWithTransformers(filePath: string, modelSize: string = 'tiny', onProgress?: (progress: number) => void, onPartial?: (text: string) => void): Promise<any> {
+        console.log('[LocalWhisper] Attempting to use @xenova/transformers in Worker Thread...');
         
-        // Dynamic imports
-         let pipeline: any;
-         try {
-              // @ts-ignore
-              const transformers = await import('@xenova/transformers');
-              pipeline = transformers.pipeline;
-         } catch (err) {
-            throw new Error('Module @xenova/transformers not found. Please run "npm install @xenova/transformers"');
-         }
-
-         // Initialize pipeline
-        // Use quantized model for speed and lower memory
-        const transcriber = await pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en', {
-             progress_callback: (data: any) => {
-                 // data: { status: 'progress', loaded: 123, total: 123, ... } for download
-                 if (data.status === 'progress' && onProgress) {
-                     // Loading model
-                     const percent = Math.round((data.loaded / data.total) * 100);
-                     // Map model loading to 0-20%
-                     onProgress(Math.round(percent * 0.2));
-                 }
-             }
-        });
-
-        // Load audio using ffmpeg
-        if (onProgress) onProgress(20);
+        // Load audio using ffmpeg in main thread (fast)
+        if (onProgress) onProgress(10);
         const audioData = await this.readAudio(filePath);
         
-        console.log('[LocalWhisper] Running pipeline...');
-        if (onProgress) onProgress(30);
+        console.log(`[LocalWhisper] Audio read: ${audioData.length} samples. Spawning worker...`);
+        if (onProgress) onProgress(20);
 
-        const output = await transcriber(audioData, {
-            chunk_length_s: 30,
-             stride_length_s: 5,
-             return_timestamps: true,
-             callback_function: (_item: any) => {
-                  // Callback for partial results
-             }
+        return new Promise((resolve, reject) => {
+             const { Worker } = require('worker_threads');
+             const path = require('path');
+             const workerPath = path.join(__dirname, 'whisper.worker.mjs');
+             
+             const worker = new Worker(workerPath);
+             
+             worker.postMessage({ audioData, modelSize });
+             
+             worker.on('message', (message: any) => {
+                 if (message.type === 'progress') {
+                     if (onProgress) onProgress(message.value);
+                 } else if (message.type === 'partial') {
+                     if (onPartial) onPartial(message.text);
+                 } else if (message.type === 'result') {
+                     worker.terminate();
+                     resolve(message.data);
+                 } else if (message.type === 'error') {
+                     worker.terminate();
+                     reject(new Error(message.error));
+                 }
+             });
+             
+             worker.on('error', (err: any) => {
+                 worker.terminate();
+                 reject(err);
+             });
+             
+             worker.on('exit', (code: number) => {
+                 if (code !== 0) {
+                     reject(new Error(`Worker stopped with exit code ${code}`));
+                 }
+             });
         });
-        
-        // Output format: { text: "...", chunks: [ { timestamp: [a,b], text: "..." } ] }
-        // We need to map this to OpenAI verbose_json format:
-        // { text: "...", segments: [ { start: 0, end: 1, text: "..." } ] }
-        
-        const segments = output.chunks.map((chunk: any) => ({
-            start: chunk.timestamp[0],
-            end: chunk.timestamp[1],
-            text: chunk.text
-        }));
-
-        if (onProgress) onProgress(100);
-
-        return {
-            text: output.text,
-            segments: segments,
-            language: 'english' // auto-detected usually
-        };
     }
 
-    private async transcribeWithPythonWhisper(filePath: string, onProgress?: (progress: number) => void): Promise<any> {
+    private async transcribeWithPythonWhisper(filePath: string, modelSize: string = 'base', onProgress?: (progress: number) => void, onPartial?: (text: string) => void): Promise<any> {
         return new Promise((resolve, reject) => {
             // Assume 'whisper' command is available in PATH (e.g. pip install openai-whisper)
             // Usage: whisper audio.mp3 --model base --output_format json --output_dir /tmp
@@ -156,9 +155,11 @@ export class LocalWhisperService implements AIService {
             const ffmpegDir = path.dirname(ffmpegPath);
             const env = { ...process.env, PATH: `${process.env.PATH}${path.delimiter}${ffmpegDir}` };
 
+            console.log(`[LocalWhisper] Using Python Whisper with model: ${modelSize}`);
+
             const whisperProcess = spawn('whisper', [
                 filePath,
-                '--model', 'base',
+                '--model', modelSize,
                 '--output_format', 'json',
                 '--output_dir', outputDir,
                 '--verbose', 'True' // Needed to parse progress
@@ -177,6 +178,13 @@ export class LocalWhisperService implements AIService {
                     // If caller provides a way to estimate percentage based on timestamps, we could do it.
                     // For now, let's just increment slightly or rely on the caller to know it's "processing"
                     if (onProgress) onProgress(50); // Just a placeholder to show activity
+                    
+                    // Extract text for streaming
+                    // Output format usually: [00:00.000 --> 00:02.000] Text content
+                    const match = output.match(/\[.*\] (.*)/);
+                    if (match && match[1] && onPartial) {
+                        onPartial(match[1].trim());
+                    }
                 }
             });
 
@@ -239,7 +247,7 @@ export class OpenAIService implements AIService {
     this.client = new OpenAI({ apiKey });
   }
 
-  async transcribeAudio(filePath: string, _onProgress?: (progress: number) => void): Promise<any> {
+  async transcribeAudio(filePath: string, _onProgress?: (progress: number) => void, _onPartial?: (text: string) => void): Promise<any> {
     try {
       const transcription = await this.client.audio.transcriptions.create({
         file: this.fs.createReadStream(filePath),
@@ -254,16 +262,78 @@ export class OpenAIService implements AIService {
     }
   }
 
-  async getHighlightsFromTranscript(transcript: string): Promise<any[]> {
+  async generateSummary(transcript: string): Promise<string> {
+    const prompt = `
+      Summarize the following video transcript. Focus on the main plot points or key takeaways.
+      Transcript: "${transcript.substring(0, 15000)}" 
+      
+      Return a concise summary (2-3 paragraphs).
+    `;
+
+    try {
+        const response = await this.client.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.5,
+        });
+        return response.choices[0].message.content || "No summary generated.";
+    } catch (error) {
+        console.error('OpenAI Summary Generation failed:', error);
+        return "Failed to generate summary.";
+    }
+  }
+
+  async generateScript(summary: string, style: string = 'engaging'): Promise<string> {
+    const prompt = `
+      Create a voice-over script based on this summary. The style should be ${style}.
+      Summary: "${summary}"
+      
+      Return the script text ready for reading or TTS.
+    `;
+
+    try {
+        const response = await this.client.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.7,
+        });
+        return response.choices[0].message.content || "No script generated.";
+    } catch (error) {
+        console.error('OpenAI Script Generation failed:', error);
+        return "Failed to generate script.";
+    }
+  }
+
+  async generateSpeech(text: string, voice: string = 'alloy'): Promise<Buffer> {
+      try {
+          const mp3 = await this.client.audio.speech.create({
+              model: "tts-1",
+              voice: voice as any,
+              input: text,
+          });
+          const buffer = Buffer.from(await mp3.arrayBuffer());
+          return buffer;
+      } catch (error) {
+          console.error('OpenAI Speech Generation failed:', error);
+          throw error;
+      }
+  }
+
+    async getHighlightsFromTranscript(transcript: string): Promise<any[]> {
+    // If transcript is very long, we might need to truncate or chunk it.
+    // We assume transcript has timestamps if possible, but here we just have text.
+    // Ideally we should pass segments. But for now let's ask for estimated timestamps.
     const prompt = `
       Analyze the following video transcript and identify 3-5 most viral/engaging segments (highlights).
       Transcript: "${transcript.substring(0, 15000)}" 
       
       Return a JSON object with a key "highlights" containing an array of objects with keys: 
-      - start_quote (string): The starting text of the segment
-      - end_quote (string): The ending text of the segment
-      - reasoning (string): Why this is viral
-      - estimated_start_time (string): approximate timestamp if inferred, otherwise null
+      - title (string): Short title for the clip
+      - description (string): Why it is interesting
+      - start_time (number): Estimated start time in seconds (integer)
+      - end_time (number): Estimated end time in seconds (integer)
+      
+      If you cannot determine exact timestamps, make a reasonable guess based on the flow, or default to 0 and 60.
     `;
 
     try {
@@ -287,15 +357,15 @@ export class OpenAIService implements AIService {
 
   async generateMetadata(context: string): Promise<AIMetadata> {
     const prompt = `
-      You are a viral content expert. Generate metadata for a short video based on this context: "${context}".
+      You are a viral content expert. Generate metadata for a short video based on this context: "${context.substring(0, 5000)}".
       
       Requirements:
-      1. Title: Catchy, clickbait-style but honest, under 60 chars.
+      1. Titles: Generate 3 distinct variations (Viral/Clickbait, Descriptive, Question-based).
       2. Description: Engaging, 2-3 sentences.
-      3. Hashtags: 5-8 relevant viral hashtags.
+      3. Hashtags: 5-8 relevant viral hashtags (no #).
       4. Category: Choose one from [Entertainment, Educational, Gaming, Tech & AI, Lifestyle].
       
-      Return ONLY a JSON object with keys: title, description, hashtags (array of strings), category.
+      Return ONLY a JSON object with keys: titles (array of strings), description, hashtags (array of strings), category.
     `;
 
     try {
@@ -311,7 +381,7 @@ export class OpenAIService implements AIService {
         
         const result = JSON.parse(content);
         return {
-            title: result.title || '',
+            titles: Array.isArray(result.titles) ? result.titles : [result.title || 'Untitled'],
             description: result.description || '',
             hashtags: Array.isArray(result.hashtags) ? result.hashtags : [],
             category: result.category || 'Entertainment'

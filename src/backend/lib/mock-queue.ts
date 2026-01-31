@@ -35,6 +35,32 @@ export class MockJob {
     console.log(`[Job:${this.id}] ${row}`);
   }
 
+  async isActive() {
+    return this._state === 'active';
+  }
+
+  async isWaiting() {
+    return this._state === 'waiting';
+  }
+
+  async remove() {
+    // Remove from global jobs
+    delete jobs[this.id];
+    // Remove from queue
+    const queue = queues[this.name];
+    if (queue) {
+        queue.jobs = queue.jobs.filter(j => j.id !== this.id);
+    }
+  }
+
+  async discard() {
+      return this.remove();
+  }
+
+  async moveToFailed(err: Error, _token?: string) {
+      this._setFailed(err);
+  }
+
   // Internal methods to state change
   _setActive() {
     this._state = 'active';
@@ -82,11 +108,13 @@ export class MockQueue {
   _processNext() {
     if (this.workers.length === 0) return;
     
+    // Find first available worker
+    const worker = this.workers.find(w => !w.busy);
+    if (!worker) return;
+
     const waitingJob = this.jobs.find(j => j['_state'] === 'waiting');
     if (!waitingJob) return;
 
-    // Pick a random worker or round robin (simple: just first one)
-    const worker = this.workers[0];
     worker._process(waitingJob);
   }
 }
@@ -94,6 +122,7 @@ export class MockQueue {
 export class MockWorker extends EventEmitter {
   name: string;
   processor: (job: MockJob) => Promise<any>;
+  busy: boolean = false;
 
   constructor(name: string, processor: (job: MockJob) => Promise<any>) {
     super();
@@ -110,8 +139,12 @@ export class MockWorker extends EventEmitter {
   }
 
   async _process(job: MockJob) {
+    if (this.busy) return; // Should not happen if queue logic is correct
+    
+    this.busy = true;
     console.log(`[MockWorker:${this.name}] Processing job ${job.id}`);
     job._setActive();
+    
     try {
       const result = await this.processor(job);
       job._setCompleted(result);
@@ -121,6 +154,13 @@ export class MockWorker extends EventEmitter {
       console.error(`[MockWorker:${this.name}] Job ${job.id} failed:`, err);
       job._setFailed(err);
       this.emit('failed', job, err);
+    } finally {
+        this.busy = false;
+        // Trigger next job in queue
+        const queue = queues[this.name];
+        if (queue) {
+            queue._processNext();
+        }
     }
   }
 }

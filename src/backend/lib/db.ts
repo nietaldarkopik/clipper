@@ -10,7 +10,9 @@ const defaultData = {
   transcripts: [],
   clips: [],
   jobs: [],
-  upload_history: []
+  upload_history: [],
+  channels: [],
+  projects: []
 };
 
 if (!fs.existsSync(dbPath)) {
@@ -91,6 +93,11 @@ export const getTranscript = (videoId: string) => {
   return t;
 };
 
+export const getTranscripts = (videoId: string) => {
+  const db = readDB();
+  return db.transcripts.filter((item: any) => item.video_id === videoId);
+};
+
 // Clips
 export const saveClip = (clip: any) => {
   const db = readDB();
@@ -112,6 +119,43 @@ export const getClips = (videoId: string) => {
 export const deleteClip = (id: string) => {
   const db = readDB();
   db.clips = db.clips.filter((c: any) => c.id !== id);
+  writeDB(db);
+  return { changes: 1 };
+};
+
+// Projects
+export const saveProject = (project: any) => {
+  const db = readDB();
+  const idx = findIndex(db.projects || [], project.id);
+  const newProject = { ...project, updated_at: new Date().toISOString() };
+  if (!newProject.created_at) newProject.created_at = new Date().toISOString();
+  
+  if (!db.projects) db.projects = [];
+  
+  if (idx >= 0) {
+    db.projects[idx] = { ...db.projects[idx], ...newProject };
+  } else {
+    db.projects.push(newProject);
+  }
+  writeDB(db);
+  return { changes: 1 };
+};
+
+export const getProjects = () => {
+  const db = readDB();
+  return (db.projects || []).sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+};
+
+export const getProject = (id: string) => {
+  const db = readDB();
+  return (db.projects || []).find((p: any) => p.id === id);
+};
+
+export const deleteProject = (id: string) => {
+  const db = readDB();
+  db.projects = (db.projects || []).filter((p: any) => p.id !== id);
+  // Optional: Delete or unlink videos? For now just unlink.
+  db.videos = db.videos.map((v: any) => v.project_id === id ? { ...v, project_id: null } : v);
   writeDB(db);
   return { changes: 1 };
 };
@@ -151,4 +195,35 @@ export const saveUploadHistory = (history: any) => {
 export const getUploadHistory = () => {
   const db = readDB();
   return db.upload_history.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+};
+
+// Channels
+export const getChannels = () => {
+  const db = readDB();
+  return db.channels || [];
+};
+
+export const saveChannel = (channel: any) => {
+  const db = readDB();
+  if (!db.channels) db.channels = [];
+  
+  const idx = findIndex(db.channels, channel.id);
+  const newChannel = { ...channel, created_at: channel.created_at || new Date().toISOString() };
+  
+  if (idx >= 0) {
+    db.channels[idx] = { ...db.channels[idx], ...newChannel };
+  } else {
+    db.channels.push(newChannel);
+  }
+  writeDB(db);
+  return { changes: 1, id: newChannel.id };
+};
+
+export const deleteChannel = (id: string) => {
+  const db = readDB();
+  if (db.channels) {
+    db.channels = db.channels.filter((c: any) => c.id !== id);
+    writeDB(db);
+  }
+  return { changes: 1 };
 };

@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { getVideos, getVideo, deleteVideo, getClips, deleteClip, getTranscript } from '../lib/db';
+import { getVideos, getVideo, deleteVideo, getClips, deleteClip, getTranscript, getTranscripts } from '../lib/db';
 
 export default async function libraryRoutes(fastify: FastifyInstance) {
   
@@ -57,5 +57,11 @@ export default async function libraryRoutes(fastify: FastifyInstance) {
     const transcript = getTranscript(id);
     if (!transcript) return reply.code(404).send({ error: 'Transcript not found' });
     return { transcript };
+  });
+
+  fastify.get('/library/videos/:id/transcripts', async (request, _reply) => {
+    const { id } = request.params as { id: string };
+    const transcripts = getTranscripts(id);
+    return { transcripts };
   });
 }

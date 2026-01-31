@@ -43,11 +43,21 @@ import {
   ZoomIn,
   ZoomOut,
   Music,
-  Sparkles
+  Sparkles,
+  Users,
+  PlusCircle,
+  Link,
+  Info,
+  RefreshCw,
+  Square,
+  Film
 } from 'lucide-react';
-import { downloadVideo, analyzeVideo, getJobStatus, getTrendingVideos, searchVideos, generateAIMetadata, uploadVideo } from './api';
+import { downloadVideo, analyzeVideo, getJobStatus, getTrendingVideos, searchVideos, generateAIMetadata, uploadVideo, getChannels, addChannel, deleteChannel, getChannelVideos, cancelDownload, retryDownload } from './api';
+import { VideoDetailsModal } from './VideoDetailsModal';
+import { ProjectsTab } from './components/ProjectsTab';
 
 const formatTime = (seconds: number) => {
+  if (!seconds || isNaN(seconds)) return '00:00';
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
@@ -64,18 +74,25 @@ interface LibraryTabProps {
 const LibraryTab = ({ setCurrentFilePath, setCurrentVideoId, setActiveTab, setTranscript, setMetadata }: LibraryTabProps) => {
     const [videos, setVideos] = useState<any[]>([]);
     const [isLoading, setIsLoading] = useState(true);
+    const [selectedVideoDetails, setSelectedVideoDetails] = useState<string | null>(null);
 
     useEffect(() => {
-        fetch('http://localhost:3000/library/videos')
-            .then(res => res.json())
-            .then(data => {
-                setVideos(data.videos || []);
-                setIsLoading(false);
-            })
-            .catch(err => {
-                console.error(err);
-                setIsLoading(false);
-            });
+        const fetchVideos = () => {
+            fetch('http://localhost:3000/library/videos')
+                .then(res => res.json())
+                .then(data => {
+                    setVideos(data.videos || []);
+                    setIsLoading(false);
+                })
+                .catch(err => {
+                    console.error(err);
+                    setIsLoading(false);
+                });
+        };
+
+        fetchVideos();
+        const interval = setInterval(fetchVideos, 3000);
+        return () => clearInterval(interval);
     }, []);
 
     const handleDelete = async (id: string) => {
@@ -94,6 +111,13 @@ const LibraryTab = ({ setCurrentFilePath, setCurrentVideoId, setActiveTab, setTr
                 <Folder className="text-indigo-500" /> Library
              </h2>
              
+             {selectedVideoDetails && (
+                <VideoDetailsModal 
+                    videoId={selectedVideoDetails} 
+                    onClose={() => setSelectedVideoDetails(null)} 
+                />
+             )}
+
              {isLoading ? (
                  <div className="flex justify-center p-10"><Loader2 className="animate-spin text-indigo-500" /></div>
              ) : (
@@ -108,6 +132,53 @@ const LibraryTab = ({ setCurrentFilePath, setCurrentVideoId, setActiveTab, setTr
                                         <Video size={40} />
                                     </div>
                                 )}
+                                
+                                {/* Downloading Overlay */}
+                                {video.status === 'downloading' && (
+                                    <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-10">
+                                        <Loader2 className="animate-spin text-indigo-500 mb-2" />
+                                        <div className="w-2/3 bg-white/10 h-1.5 rounded-full overflow-hidden">
+                                            <div className="bg-indigo-500 h-full transition-all duration-300" style={{ width: `${video.progress || 0}%` }} />
+                                        </div>
+                                        <span className="text-xs text-slate-300 mt-2 mb-3">{Math.round(video.progress || 0)}%</span>
+                                        <button 
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                cancelDownload(video.id);
+                                            }}
+                                            className="flex items-center gap-1 text-xs bg-red-500/20 text-red-400 px-2 py-1 rounded hover:bg-red-500/40 transition"
+                                        >
+                                            <Square size={10} fill="currentColor" /> Stop
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* Failed/Cancelled Overlay */}
+                                {(video.status === 'failed' || video.status === 'cancelled') && (
+                                    <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center z-10">
+                                        <AlertCircle className="text-red-500 mb-2" />
+                                        <span className="text-xs text-red-400 font-bold uppercase mb-3">{video.status}</span>
+                                        <button 
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                retryDownload(video.id);
+                                            }}
+                                            className="flex items-center gap-1 text-xs bg-white text-black px-3 py-1.5 rounded-full hover:scale-105 transition font-bold"
+                                        >
+                                            <RefreshCw size={12} /> Retry
+                                        </button>
+                                        <button 
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleDelete(video.id);
+                                            }}
+                                            className="mt-2 text-xs text-slate-500 hover:text-white underline"
+                                        >
+                                            Remove
+                                        </button>
+                                    </div>
+                                )}
+
                                 <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-2">
                                     <button className="bg-white text-black p-2 rounded-full hover:scale-110 transition" onClick={() => {
                                         setCurrentFilePath(video.filepath);
@@ -146,6 +217,11 @@ const LibraryTab = ({ setCurrentFilePath, setCurrentVideoId, setActiveTab, setTr
                                     }}>
                                         <Play size={20} fill="currentColor" />
                                     </button>
+                                    
+                                    <button className="bg-slate-700 text-white p-2 rounded-full hover:scale-110 transition" onClick={() => setSelectedVideoDetails(video.id)}>
+                                        <Info size={20} />
+                                    </button>
+
                                     <button className="bg-red-500 text-white p-2 rounded-full hover:scale-110 transition" onClick={() => handleDelete(video.id)}>
                                         <Trash2 size={20} />
                                     </button>
@@ -164,6 +240,267 @@ const LibraryTab = ({ setCurrentFilePath, setCurrentVideoId, setActiveTab, setTr
              )}
         </div>
     );
+};
+
+const ChannelsTab = ({ onUseChannel }: { onUseChannel: (url: string) => void }) => {
+  const [channels, setChannels] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newChannel, setNewChannel] = useState({ name: '', platform: 'youtube', url: '', description: '' });
+  const [scrapedVideos, setScrapedVideos] = useState<any[]>([]);
+  const [isScraping, setIsScraping] = useState(false);
+  const [activeChannelId, setActiveChannelId] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadChannels();
+  }, []);
+
+  const loadChannels = async () => {
+    setIsLoading(true);
+    try {
+      const data = await getChannels();
+      setChannels(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleAddChannel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newChannel.name || !newChannel.url) return;
+    
+    try {
+      await addChannel(newChannel);
+      setNewChannel({ name: '', platform: 'youtube', url: '', description: '' });
+      setShowAddForm(false);
+      loadChannels();
+    } catch (e) {
+      alert('Failed to add channel');
+    }
+  };
+
+  const handleDeleteChannel = async (id: string) => {
+    if (!confirm('Are you sure?')) return;
+    try {
+      await deleteChannel(id);
+      loadChannels();
+      if (activeChannelId === id) {
+        setActiveChannelId(null);
+        setScrapedVideos([]);
+      }
+    } catch (e) {
+      alert('Failed to delete');
+    }
+  };
+
+  const handleScrapeChannel = async (channel: any) => {
+    if (activeChannelId === channel.id) {
+        // Don't toggle off, just refresh if needed, or maybe do nothing? 
+        // Let's allow refreshing by clicking the refresh button, but clicking the card again could just keep it selected.
+        // Actually, let's just set it active.
+        return;
+    }
+
+    setIsScraping(true);
+    setActiveChannelId(channel.id);
+    setScrapedVideos([]);
+    
+    try {
+      const videos = await getChannelVideos(channel.id);
+      setScrapedVideos(videos);
+    } catch (e) {
+      console.error(e);
+      alert('Failed to fetch videos. Ensure backend is running and yt-dlp is available.');
+    } finally {
+      setIsScraping(false);
+    }
+  };
+
+  return (
+    <div className="flex-1 flex flex-row overflow-hidden bg-[#0f0f0f]">
+        {/* Left Side: Channel List */}
+        <div className="w-1/3 flex flex-col border-r border-white/5 bg-[#141414]">
+            <div className="p-6 border-b border-white/5 flex items-center justify-between">
+                <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                    <Users className="text-indigo-500" /> Channels
+                </h2>
+                <button 
+                    onClick={() => setShowAddForm(true)}
+                    className="bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600 hover:text-white p-2 rounded-lg transition"
+                >
+                    <PlusCircle size={20} />
+                </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {showAddForm && (
+                    <div className="mb-4 bg-[#1a1a1a] p-4 rounded-xl border border-indigo-500/30">
+                        <h3 className="text-sm font-bold text-white mb-3">Add New Channel</h3>
+                        <form onSubmit={handleAddChannel} className="space-y-3">
+                            <input 
+                                type="text" 
+                                value={newChannel.name}
+                                onChange={e => setNewChannel({...newChannel, name: e.target.value})}
+                                className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                                placeholder="Channel Name"
+                            />
+                            <select 
+                                value={newChannel.platform}
+                                onChange={e => setNewChannel({...newChannel, platform: e.target.value})}
+                                className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                            >
+                                <option value="youtube">YouTube</option>
+                                <option value="tiktok">TikTok</option>
+                                <option value="instagram">Instagram</option>
+                                <option value="facebook">Facebook</option>
+                            </select>
+                            <input 
+                                type="text" 
+                                value={newChannel.url}
+                                onChange={e => setNewChannel({...newChannel, url: e.target.value})}
+                                className="w-full bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500"
+                                placeholder="Channel URL"
+                            />
+                            <div className="flex gap-2 justify-end">
+                                <button 
+                                    type="button"
+                                    onClick={() => setShowAddForm(false)}
+                                    className="px-3 py-1.5 text-xs text-slate-400 hover:text-white"
+                                >
+                                    Cancel
+                                </button>
+                                <button 
+                                    type="submit"
+                                    className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-xs font-bold"
+                                >
+                                    Save
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                )}
+
+                {isLoading ? (
+                    <div className="flex justify-center p-10"><Loader2 className="animate-spin text-indigo-500" /></div>
+                ) : (
+                    channels.map(channel => (
+                        <div 
+                            key={channel.id} 
+                            onClick={() => handleScrapeChannel(channel)}
+                            className={`p-4 rounded-xl border cursor-pointer transition group relative ${activeChannelId === channel.id ? 'bg-indigo-900/20 border-indigo-500' : 'bg-[#1a1a1a] border-white/5 hover:border-white/10'}`}
+                        >
+                            <div className="flex justify-between items-start mb-2">
+                                <div className="flex items-center gap-2">
+                                    {channel.platform === 'youtube' && <Youtube size={16} className="text-red-500" />}
+                                    {channel.platform === 'tiktok' && <Music size={16} className="text-pink-500" />}
+                                    {channel.platform === 'instagram' && <Instagram size={16} className="text-purple-500" />}
+                                    {channel.platform === 'facebook' && <Share2 size={16} className="text-blue-500" />}
+                                    <h3 className="font-bold text-white text-sm">{channel.name}</h3>
+                                </div>
+                                <button 
+                                    onClick={(e) => { e.stopPropagation(); handleDeleteChannel(channel.id); }}
+                                    className="text-slate-600 hover:text-red-500 transition opacity-0 group-hover:opacity-100"
+                                >
+                                    <Trash2 size={14} />
+                                </button>
+                            </div>
+                            <div className="text-[10px] text-slate-500 truncate">{channel.url}</div>
+                        </div>
+                    ))
+                )}
+            </div>
+        </div>
+
+        {/* Right Side: Channel Videos */}
+        <div className="flex-1 flex flex-col bg-[#0f0f0f]">
+            {activeChannelId ? (
+                <>
+                    <div className="h-16 border-b border-white/5 flex items-center justify-between px-6 bg-[#141414]">
+                        <h3 className="font-bold text-white flex items-center gap-2">
+                            <ListVideo className="text-indigo-500" /> 
+                            Videos from {channels.find(c => c.id === activeChannelId)?.name}
+                        </h3>
+                        <div className="flex gap-2">
+                             <button 
+                                onClick={() => {
+                                    const channel = channels.find(c => c.id === activeChannelId);
+                                    if(channel) onUseChannel(channel.url);
+                                }}
+                                className="bg-white/5 hover:bg-white/10 text-slate-300 px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-2"
+                            >
+                                <Link size={14} /> Open Channel
+                            </button>
+                            <button 
+                                onClick={() => handleScrapeChannel(channels.find(c => c.id === activeChannelId))}
+                                className="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-2"
+                            >
+                                <Undo2 size={14} /> Refresh
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-6">
+                        {isScraping ? (
+                            <div className="flex flex-col items-center justify-center h-full gap-4 text-slate-500">
+                                <Loader2 size={32} className="animate-spin text-indigo-500" />
+                                <p>Scraping videos from channel...</p>
+                            </div>
+                        ) : scrapedVideos.length > 0 ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {scrapedVideos.map(video => (
+                                    <div key={video.id} className="bg-[#1a1a1a] rounded-xl overflow-hidden border border-white/5 group hover:border-indigo-500/50 transition">
+                                        <div className="aspect-video bg-black relative">
+                                            <img src={video.thumbnail} alt={video.title} className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition" />
+                                            
+                                            {/* Type Badge */}
+                                            <div className={`absolute top-2 left-2 px-1.5 py-0.5 rounded text-[10px] font-bold text-white uppercase shadow-sm ${
+                                                video.type === 'live' ? 'bg-red-600' :
+                                                video.type === 'short' ? 'bg-emerald-600' :
+                                                'bg-blue-600'
+                                            }`}>
+                                                {video.type || 'VIDEO'}
+                                            </div>
+
+                                            {/* Duration */}
+                                            <div className="absolute bottom-2 right-2 bg-black/80 px-1.5 py-0.5 rounded text-[10px] font-mono text-white">
+                                                {video.type === 'live' && (!video.duration || video.duration === 0) ? 'LIVE' : formatTime(Number(video.duration))}
+                                            </div>
+                                        </div>
+                                        <div className="p-3">
+                                            <h4 className="text-xs font-bold text-white line-clamp-2 mb-2 h-8" title={video.title}>{video.title}</h4>
+                                            <div className="flex items-center justify-between text-[10px] text-slate-500 mb-3">
+                                                <span>{video.views ? Number(video.views).toLocaleString() : 'N/A'} views</span>
+                                                <span>{video.uploader}</span>
+                                            </div>
+                                            <button 
+                                                onClick={() => onUseChannel(video.url)}
+                                                className="w-full py-1.5 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600 hover:text-white rounded-lg text-xs font-bold transition flex items-center justify-center gap-2"
+                                            >
+                                                <Scissors size={14} /> Use for Clip
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="flex flex-col items-center justify-center h-full text-slate-500">
+                                <Video size={48} className="opacity-20 mb-4" />
+                                <p>No videos found or failed to scrape.</p>
+                            </div>
+                        )}
+                    </div>
+                </>
+            ) : (
+                <div className="flex flex-col items-center justify-center h-full text-slate-500">
+                    <Users size={48} className="opacity-20 mb-4" />
+                    <p>Select a channel to view videos</p>
+                </div>
+            )}
+        </div>
+    </div>
+  );
 };
 
 // Timeline Types
@@ -193,7 +530,7 @@ interface TimelineState {
 }
 
 const App = () => {
-  const [activeTab, setActiveTab] = useState('research'); // research | editor | captions | publish
+  const [activeTab, setActiveTab] = useState('projects'); // research | editor | captions | publish | projects
   const [isPlaying, setIsPlaying] = useState(false);
   const [isProcessingAI, setIsProcessingAI] = useState(false);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
@@ -646,15 +983,15 @@ const App = () => {
   // --- SUB-HALAMAN: EDITOR ---
   const EditorTab = () => (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <header className="h-14 border-b border-white/5 flex items-center justify-between px-6 bg-[#141414]">
-        <div className="flex items-center gap-3 text-sm">
+      <header className="h-14 border-b border-white/5 flex items-center justify-between px-6 bg-[#141414] titlebar-drag-region">
+        <div className="flex items-center gap-3 text-sm no-drag">
           <span className="font-semibold">VLOG_RAHASIA_SUKSES.mp4</span>
           <span className="text-slate-500">|</span>
           <div className="flex items-center gap-2 text-indigo-400 text-xs font-bold bg-indigo-400/10 px-2 py-1 rounded">
              <CheckCircle2 size={12} /> Video Siap Digabung
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 no-drag">
           <button 
             onClick={handleAIAnalyze}
             disabled={isProcessingAI || !currentJobId}
@@ -1158,13 +1495,16 @@ const App = () => {
   return (
     <div className="flex h-screen w-full bg-[#0f0f0f] text-slate-200 font-sans overflow-hidden select-none">
       {/* Sidebar Navigasi Utama */}
-      <aside className="w-20 flex flex-col items-center py-10 bg-[#1a1a1a] border-r border-white/5 space-y-12">
-        <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-2xl shadow-indigo-500/40 cursor-pointer hover:rotate-6 transition-transform">
+      <aside className="w-20 flex flex-col items-center py-10 bg-[#1a1a1a] border-r border-white/5 space-y-12 relative">
+        <div className="absolute top-0 left-0 w-full h-8 titlebar-drag-region" />
+        <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-2xl shadow-indigo-500/40 cursor-pointer hover:rotate-6 transition-transform z-10">
           <Video size={26} className="text-white" />
         </div>
         <nav className="flex flex-col space-y-10">
           {[
+            { id: 'projects', icon: <Film size={22} />, title: 'Projects' },
             { id: 'research', icon: <Search size={22} />, title: 'Research' },
+            { id: 'channels', icon: <Users size={22} />, title: 'Channels' },
             { id: 'library', icon: <Folder size={22} />, title: 'Library' },
             { id: 'editor', icon: <Layers size={22} />, title: 'Editor' },
             { id: 'captions', icon: <Type size={22} />, title: 'Captions' },
@@ -1182,15 +1522,20 @@ const App = () => {
           ))}
         </nav>
         <div className="mt-auto flex flex-col space-y-8">
-           <button className="text-slate-600 hover:text-white transition"><History size={20} /></button>
-           <button className="text-slate-600 hover:text-white transition"><Settings size={20} /></button>
+           <button className="group relative flex flex-col items-center gap-2 transition-all text-slate-600 hover:text-white"><History size={20} /></button>
+           <button className="group relative flex flex-col items-center gap-2 transition-all text-slate-600 hover:text-white"><Settings size={20} /></button>
            <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-[10px] font-bold text-indigo-400">JD</div>
         </div>
       </aside>
 
       {/* Kontainer Aplikasi */}
-      <main className="flex-1 flex flex-col overflow-hidden">
+      <main className="flex-1 flex flex-col overflow-hidden relative">
+         {activeTab !== 'editor' && (
+            <div className="absolute top-1 left-0 w-full h-8 titlebar-drag-region z-50" />
+         )}
+         {activeTab === 'projects' && <ProjectsTab />}
          {activeTab === 'research' && ResearchTab()}
+         {activeTab === 'channels' && <ChannelsTab onUseChannel={(url) => { setSearchUrl(url); setActiveTab('research'); }} />}
          {activeTab === 'library' && <LibraryTab setCurrentFilePath={setCurrentFilePath} setCurrentVideoId={setCurrentVideoId} setActiveTab={setActiveTab} setTranscript={setTranscript} setMetadata={setMetadata} />}
          {activeTab === 'editor' && EditorTab()}
          {activeTab === 'captions' && CaptionTab()}
