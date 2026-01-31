@@ -12,7 +12,16 @@ const defaultData = {
   jobs: [],
   upload_history: [],
   channels: [],
-  projects: []
+  projects: [],
+  settings: {
+    aiProvider: 'openai', // 'openai' | 'ollama'
+    openaiApiKey: '',
+    ollamaUrl: 'http://localhost:11434',
+    backendUrl: 'http://localhost:3000',
+    transcriptionMethod: 'auto', // 'auto' | 'youtube' | 'whisper'
+    whisperModel: 'tiny',
+    language: 'en'
+  }
 };
 
 if (!fs.existsSync(dbPath)) {
@@ -96,6 +105,19 @@ export const getTranscript = (videoId: string) => {
 export const getTranscripts = (videoId: string) => {
   const db = readDB();
   return db.transcripts.filter((item: any) => item.video_id === videoId);
+};
+
+// Settings
+export const getSettings = () => {
+  const db = readDB();
+  return db.settings || defaultData.settings;
+};
+
+export const updateSettings = (settings: any) => {
+  const db = readDB();
+  db.settings = { ...db.settings, ...settings };
+  writeDB(db);
+  return db.settings;
 };
 
 // Clips

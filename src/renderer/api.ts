@@ -3,7 +3,7 @@ import axios from 'axios';
 // Automatically detect base URL:
 // - If VITE_API_URL is set (via .env), use it
 // - Otherwise, default to relative path (empty string) for same-origin proxy
-const BASE_URL = import.meta.env.VITE_API_URL || '';
+const BASE_URL = localStorage.getItem('VITE_API_URL') || import.meta.env.VITE_API_URL || '';
 const API_URL = `${BASE_URL}/api`;
 
 export const api = axios.create({
@@ -12,6 +12,12 @@ export const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// Helper to update base URL dynamically
+export const setApiBaseUrl = (url: string) => {
+    localStorage.setItem('VITE_API_URL', url);
+    api.defaults.baseURL = `${url}/api`;
+};
 
 export const downloadVideo = async (url: string, projectId?: string, downloadSubtitles?: boolean) => {
   const response = await api.post('/video/download', { url, projectId, downloadSubtitles });
@@ -99,73 +105,13 @@ export const getTranscript = async (id: string) => {
   return response.data;
 };
 
-export const getTranscripts = async (id: string) => {
-  const response = await api.get(`/library/videos/${id}/transcripts`);
+// Settings
+export const getSettings = async () => {
+  const response = await api.get('/settings');
   return response.data;
 };
 
-// Projects
-export const getProjects = async () => {
-  const response = await api.get('/projects');
+export const updateSettings = async (settings: any) => {
+  const response = await api.post('/settings', settings);
   return response.data;
-};
-
-export const getProject = async (id: string) => {
-  const response = await api.get(`/projects/${id}`);
-  return response.data;
-};
-
-export const createProject = async (data: { name: string, description?: string }) => {
-  const response = await api.post('/projects', data);
-  return response.data;
-};
-
-export const deleteProject = async (id: string) => {
-  const response = await api.delete(`/projects/${id}`);
-  return response.data;
-};
-
-export const getLibraryVideos = async () => {
-    const response = await api.get('/library/videos');
-    return response.data;
-};
-
-export const addVideoToProject = async (projectId: string, videoId: string) => {
-    const response = await api.post(`/projects/${projectId}/videos/add`, { videoId });
-    return response.data;
-};
-
-export const generateSummary = async (transcript: string) => {
-    const response = await api.post('/ai/generate-summary', { transcript });
-    return response.data;
-};
-
-export const generateScript = async (summary: string, style?: string) => {
-    const response = await api.post('/ai/generate-script', { summary, style });
-    return response.data;
-};
-
-export const generateHighlights = async (transcript: string) => {
-    const response = await api.post('/ai/generate-highlights', { transcript });
-    return response.data;
-};
-
-export const generateSpeech = async (text: string, voice?: string) => {
-    const response = await api.post('/ai/generate-speech', { text, voice }, { responseType: 'arraybuffer' });
-    return response.data; // Returns ArrayBuffer
-};
-
-export const mergeClips = async (filePaths: string[], projectId: string, outputName: string) => {
-    const response = await api.post('/editor/merge', { filePaths, projectId, outputName });
-    return response.data;
-};
-
-export const saveClips = async (clips: any[], videoId: string) => {
-    const response = await api.post('/editor/clips/batch', { clips, videoId });
-    return response.data;
-};
-
-export const deleteClip = async (id: string) => {
-    const response = await api.delete(`/editor/clips/${id}`);
-    return response.data;
 };

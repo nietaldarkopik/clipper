@@ -55,6 +55,7 @@ import {
 import { api, downloadVideo, analyzeVideo, getJobStatus, getTrendingVideos, searchVideos, generateAIMetadata, uploadVideo, getChannels, addChannel, deleteChannel, getChannelVideos, cancelDownload, retryDownload } from './api';
 import { VideoDetailsModal } from './VideoDetailsModal';
 import { ProjectsTab } from './components/ProjectsTab';
+import { SettingsTab } from './components/SettingsTab';
 
 const formatTime = (seconds: number) => {
   if (!seconds || isNaN(seconds)) return '00:00';
@@ -1523,7 +1524,12 @@ const App = () => {
         </nav>
         <div className="mt-auto flex flex-col space-y-8">
            <button className="group relative flex flex-col items-center gap-2 transition-all text-slate-600 hover:text-white"><History size={20} /></button>
-           <button className="group relative flex flex-col items-center gap-2 transition-all text-slate-600 hover:text-white"><Settings size={20} /></button>
+           <button 
+               onClick={() => setActiveTab('settings')}
+               className={`group relative flex flex-col items-center gap-2 transition-all ${activeTab === 'settings' ? 'text-indigo-400' : 'text-slate-600 hover:text-white'}`}
+           >
+               <Settings size={20} />
+           </button>
            <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-[10px] font-bold text-indigo-400">JD</div>
         </div>
       </aside>
@@ -1540,6 +1546,7 @@ const App = () => {
          {activeTab === 'editor' && EditorTab()}
          {activeTab === 'captions' && CaptionTab()}
          {activeTab === 'publish' && PublishTab()}
+         {activeTab === 'settings' && <SettingsTab />}
       </main>
     </div>
   );

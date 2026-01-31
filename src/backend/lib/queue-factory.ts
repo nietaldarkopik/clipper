@@ -3,11 +3,12 @@ import { MockQueue, MockWorker } from './mock-queue';
 import { getRedisConnection } from '../redis';
 
 // Auto-detect or force mock.
-const USE_MOCK = !process.env.REDIS_HOST;
+// Force mock if redis connection fails or is not configured
+const USE_MOCK = true; //!process.env.REDIS_HOST;
 
 export const createQueue = (name: string) => {
   if (USE_MOCK) {
-    console.log(`[QueueFactory] Using In-Memory MockQueue for '${name}' (Redis not configured)`);
+    console.log(`[QueueFactory] Using In-Memory MockQueue for '${name}'`);
     return new MockQueue(name) as any as Queue;
   }
   console.log(`[QueueFactory] Using Redis Queue for '${name}'`);

@@ -14,6 +14,9 @@ if (ffmpegPath) {
     console.error('[LocalWhisper] ffmpeg-static not found!');
 }
 
+import axios from 'axios';
+import { getSettings } from './db';
+
 export interface AIMetadata {
   titles: string[];
   description: string;
@@ -30,31 +33,155 @@ export interface AIService {
   generateSpeech(text: string, voice?: string): Promise<Buffer>;
 }
 
-export class LocalWhisperService implements AIService {
-    private openAI: OpenAIService;
+export class OllamaService implements AIService {
+    private baseUrl: string;
 
-    constructor(apiKey: string) {
-        this.openAI = new OpenAIService(apiKey);
+    constructor(baseUrl: string) {
+        this.baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
+    }
+
+    private async chat(messages: any[], jsonMode: boolean = false): Promise<string> {
+        // Handle various URL formats
+        // If baseUrl ends with /chat, assume it's the full endpoint
+        // Otherwise append /api/chat
+        const url = this.baseUrl.includes('/chat') ? this.baseUrl : `${this.baseUrl}/api/chat`;
+        
+        try {
+            const payload: any = {
+                model: "llama3", // Default to llama3 or make configurable?
+                messages: messages,
+                stream: false,
+            };
+            
+            if (jsonMode) {
+                payload.format = "json";
+            }
+
+            // If user uses "ollama urlnya ke prof.unwim.ac.id/ai/chat", it might require specific headers or format.
+            // Assuming standard Ollama API compatibility.
+            
+            const response = await axios.post(url, payload);
+            
+            if (response.data && response.data.message && response.data.message.content) {
+                return response.data.message.content;
+            } else if (response.data && response.data.response) {
+                 // Some older Ollama versions or /api/generate
+                 return response.data.response;
+            }
+            
+            throw new Error('Invalid response from Ollama');
+        } catch (error: any) {
+            console.error('Ollama request failed:', error.message);
+            throw error;
+        }
     }
 
     async generateMetadata(context: string): Promise<AIMetadata> {
-        return this.openAI.generateMetadata(context);
+        const prompt = `
+          You are a viral content expert. Generate metadata for a short video based on this context: "${context.substring(0, 5000)}".
+          
+          Requirements:
+          1. Titles: Generate 3 distinct variations (Viral/Clickbait, Descriptive, Question-based).
+          2. Description: Engaging, 2-3 sentences.
+          3. Hashtags: 5-8 relevant viral hashtags (no #).
+          4. Category: Choose one from [Entertainment, Educational, Gaming, Tech & AI, Lifestyle].
+          
+          Return ONLY a JSON object with keys: titles (array of strings), description, hashtags (array of strings), category.
+        `;
+
+        try {
+            const content = await this.chat([{ role: "user", content: prompt }], true);
+            const result = JSON.parse(content);
+            return {
+                titles: Array.isArray(result.titles) ? result.titles : [result.title || 'Untitled'],
+                description: result.description || '',
+                hashtags: Array.isArray(result.hashtags) ? result.hashtags : [],
+                category: result.category || 'Entertainment'
+            };
+        } catch (error) {
+            console.error('Ollama generateMetadata failed:', error);
+            throw error;
+        }
     }
 
     async getHighlightsFromTranscript(transcript: string): Promise<any[]> {
-        return this.openAI.getHighlightsFromTranscript(transcript);
+        const prompt = `
+          Analyze the following video transcript and identify 3-5 most viral/engaging segments (highlights).
+          Transcript: "${transcript.substring(0, 15000)}" 
+          
+          Return a JSON object with a key "highlights" containing an array of objects with keys: 
+          - title (string): Short title for the clip
+          - description (string): Why it is interesting
+          - start_time (number): Estimated start time in seconds (integer)
+          - end_time (number): Estimated end time in seconds (integer)
+          
+          If you cannot determine exact timestamps, make a reasonable guess based on the flow, or default to 0 and 60.
+        `;
+
+        try {
+            const content = await this.chat([{ role: "user", content: prompt }], true);
+            const result = JSON.parse(content);
+            return result.highlights || [];
+        } catch (error) {
+             console.error('Ollama highlights failed:', error);
+             return [];
+        }
     }
 
     async generateSummary(transcript: string): Promise<string> {
-        return this.openAI.generateSummary(transcript);
+        const prompt = `
+          Summarize the following video transcript. Focus on the main plot points or key takeaways.
+          Transcript: "${transcript.substring(0, 15000)}" 
+          
+          Return a concise summary (2-3 paragraphs).
+        `;
+        return this.chat([{ role: "user", content: prompt }]);
     }
 
     async generateScript(summary: string, style?: string): Promise<string> {
-        return this.openAI.generateScript(summary, style);
+        const prompt = `
+          Create a voice-over script based on this summary. The style should be ${style || 'engaging'}.
+          Summary: "${summary}"
+          
+          Return the script text ready for reading or TTS.
+        `;
+        return this.chat([{ role: "user", content: prompt }]);
+    }
+
+    async generateSpeech(_text: string, _voice?: string): Promise<Buffer> {
+        throw new Error("Speech generation not supported by Ollama service yet.");
+    }
+
+    async transcribeAudio(_filePath: string, _modelSize?: string, _onProgress?: (progress: number) => void, _onPartial?: (text: string) => void): Promise<any> {
+        throw new Error("Audio transcription not supported by Ollama service directly.");
+    }
+}
+
+export class LocalWhisperService implements AIService {
+    private textService: AIService;
+
+    constructor(textService: AIService) {
+        this.textService = textService;
+    }
+
+    async generateMetadata(context: string): Promise<AIMetadata> {
+        return this.textService.generateMetadata(context);
+    }
+
+    async getHighlightsFromTranscript(transcript: string): Promise<any[]> {
+        return this.textService.getHighlightsFromTranscript(transcript);
+    }
+
+    async generateSummary(transcript: string): Promise<string> {
+        return this.textService.generateSummary(transcript);
+    }
+
+    async generateScript(summary: string, style?: string): Promise<string> {
+        return this.textService.generateScript(summary, style);
     }
 
     async generateSpeech(text: string, voice?: string): Promise<Buffer> {
-        return this.openAI.generateSpeech(text, voice);
+        return this.textService.generateSpeech(text, voice);
     }
 
     async transcribeAudio(filePath: string, modelSize: string = 'tiny', onProgress?: (progress: number) => void, onPartial?: (text: string) => void): Promise<any> {
@@ -397,16 +524,32 @@ export class OpenAIService implements AIService {
 }
 
 // Singleton or Factory
-let aiServiceInstance: AIService | null = null;
+// We don't use singleton for the outer service anymore to allow dynamic config changes
+// But we might want to cache the internal services if config hasn't changed?
+// For now, simple recreation is fine as these are lightweight clients.
 
 export const getAIService = (): AIService => {
-    if (!aiServiceInstance) {
-        const apiKey = process.env.OPENAI_API_KEY;
+    const settings = getSettings();
+    let textService: AIService;
+    
+    // Determine AI Provider
+    if (settings.aiProvider === 'ollama') {
+        const url = settings.ollamaUrl || 'http://localhost:11434';
+        textService = new OllamaService(url);
+    } else {
+        // Default to OpenAI
+        const apiKey = settings.openaiApiKey || process.env.OPENAI_API_KEY;
         if (!apiKey) {
-            throw new Error("OPENAI_API_KEY is not set");
+             console.warn("OPENAI_API_KEY is not set in settings or env. AI features may fail.");
+             // We can still return the service, but calls will fail. 
+             // Or we can return a Mock/Error service.
+             // For now, let OpenAIService handle missing key (it might throw or fail on call).
         }
-        // Use LocalWhisperService which handles fallback and hybrid usage
-        aiServiceInstance = new LocalWhisperService(apiKey);
+        textService = new OpenAIService(apiKey || 'dummy-key');
     }
-    return aiServiceInstance;
+    
+    // We wrap it in LocalWhisperService which handles the 'transcribeAudio' 
+    // using local strategy (Transformers.js / Whisper CLI) 
+    // and delegates text generation to the selected provider.
+    return new LocalWhisperService(textService);
 };

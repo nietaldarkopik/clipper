@@ -3,7 +3,7 @@ import path from 'path';
 import { downloadQueue, analyzeQueue, processQueue, uploadQueue } from '../queues';
 import { v4 as uuidv4 } from 'uuid';
 import { cancelDownloadJob } from '../workers';
-import { getVideo, saveVideo, saveClip, deleteClip } from '../lib/db';
+import { getSettings, getVideo, saveVideo, saveClip, deleteClip } from '../lib/db';
 
 export default async function videoRoutes(fastify: FastifyInstance) {
   
@@ -135,8 +135,19 @@ export default async function videoRoutes(fastify: FastifyInstance) {
 
   // POST /video/analyze
   fastify.post('/video/analyze', async (request, reply) => {
-    const { id, modelSize, method } = request.body as { id: string, modelSize?: string, method?: 'youtube' | 'whisper' };
+    let { id, modelSize, method } = request.body as { id: string, modelSize?: string, method?: 'youtube' | 'whisper' | 'auto' };
     
+    // Apply defaults from settings
+    const settings = getSettings();
+    
+    if (!method) {
+        method = settings.transcriptionMethod || 'auto';
+    }
+    
+    if (!modelSize && method !== 'youtube') {
+        modelSize = settings.whisperModel || 'tiny';
+    }
+
     console.log(`[API] /video/analyze request received: id=${id}, modelSize=${modelSize}, method=${method}`);
     
     if (!id) {

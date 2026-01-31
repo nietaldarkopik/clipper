@@ -388,62 +388,69 @@ export const startWorkers = () => {
           
           let transcriptData: any;
           
-          if (method === 'youtube') {
-              // Fetch video URL
-              const video = getVideo(id);
-              if (!video || !video.url) {
-                  throw new Error("Video URL not found for YouTube subtitle download");
+          // Strategy 1: YouTube Subtitles (if method is youtube or auto)
+          if (method === 'youtube' || method === 'auto') {
+              try {
+                  // Fetch video URL
+                  const video = getVideo(id);
+                  if (!video || !video.url) {
+                      throw new Error("Video URL not found for YouTube subtitle download");
+                  }
+
+                  console.log(`[Analyze] Downloading subtitles from YouTube for ${id}...`);
+                  
+                  const outputTemplate = path.join(downloadsDir, `${id}.%(ext)s`);
+                  const ytDlpOptions: any = {
+                      output: outputTemplate,
+                      skipDownload: true,
+                      writeSub: true,
+                      writeAutoSub: true,
+                      subFormat: 'json3',
+                      noCheckCertificate: true,
+                      noWarnings: true,
+                      preferFreeFormats: true,
+                  };
+
+                  await ytDlpExec(video.url, ytDlpOptions);
+
+                  // Find the subtitle file
+                  const files = fs.readdirSync(downloadsDir);
+                  const transcriptFile = files.find(f => f.startsWith(id) && f.endsWith('.json3'));
+                  
+                  if (!transcriptFile) {
+                      throw new Error("YouTube subtitles not found after download attempt");
+                  }
+
+                  const tContent = await fs.readJson(path.join(downloadsDir, transcriptFile));
+                  
+                  // Extract text from json3 events
+                  let fullText = '';
+                  if (tContent.events) {
+                      fullText = tContent.events
+                          .filter((e: any) => e.segs)
+                          .map((e: any) => e.segs.map((s: any) => s.utf8).join(''))
+                          .join(' ');
+                  }
+
+                  transcriptData = {
+                      text: fullText,
+                      raw: tContent,
+                      source: 'youtube'
+                  };
+                  console.log(`[Analyze] Successfully retrieved YouTube subtitles`);
+                  
+              } catch (e: any) {
+                  console.warn(`[Analyze] YouTube subtitle strategy failed: ${e.message}`);
+                  if (method === 'youtube') {
+                      throw e; // Fail if explicitly requested
+                  }
+                  // Fallback to Whisper
               }
+          }
 
-              console.log(`[Analyze] Downloading subtitles from YouTube for ${id}...`);
-              
-              const outputTemplate = path.join(downloadsDir, `${id}.%(ext)s`);
-              const ytDlpOptions: any = {
-                  output: outputTemplate,
-                  skipDownload: true,
-                  writeSub: true,
-                  writeAutoSub: true,
-                  subFormat: 'json3',
-                  noCheckCertificate: true,
-                  noWarnings: true,
-                  preferFreeFormats: true,
-              };
-
-              await ytDlpExec(video.url, ytDlpOptions);
-
-              // Find the subtitle file
-              const files = fs.readdirSync(downloadsDir);
-              const transcriptFile = files.find(f => f.startsWith(id) && f.endsWith('.json3'));
-              
-              if (!transcriptFile) {
-                  throw new Error("YouTube subtitles not found after download attempt");
-              }
-
-              const tContent = await fs.readJson(path.join(downloadsDir, transcriptFile));
-              
-              // Extract text from json3 events
-              let fullText = '';
-              if (tContent.events) {
-                  fullText = tContent.events
-                      .filter((e: any) => e.segs)
-                      .map((e: any) => e.segs.map((s: any) => s.utf8).join(''))
-                      .join(' ');
-              }
-
-              transcriptData = {
-                  text: fullText,
-                  raw: tContent,
-                  source: 'youtube'
-              };
-              
-          } else {
-              // Whisper logic
-              // Check if transcript already exists to save time/cost
-              // If modelSize is explicitly provided (via prompt) OR method is 'whisper', we treat it as a fresh run request if user initiated it.
-              // Ideally, we should check if the existing transcript is good enough, but for now, 
-              // if the user explicitly requested 'whisper' or 'modelSize', we re-run ONLY if forced.
-              // Actually, simpler logic: If transcript exists AND modelSize is NOT provided (auto-mode), use cache.
-              // If modelSize IS provided, it means user manually triggered it with a choice, so we re-run.
+          if (!transcriptData) {
+               // Whisper logic
+               console.log(`[Analyze] Using Whisper strategy...`);
               
               const shouldTranscribe = !fs.existsSync(transcriptPath) || !!modelSize;
 
@@ -462,6 +469,10 @@ export const startWorkers = () => {
                         // We throttle updates slightly if needed, but for now direct update
                         await job.updateData({ ...job.data, partialTranscript: accumulatedText });
                     });
+                    
+                    // Add source metadata
+                    transcriptData.source = 'whisper';
+                    
                     await fs.writeJson(transcriptPath, { ...transcriptData, videoId: id, createdAt: new Date() }, { spaces: 2 });
                }
           }
@@ -474,7 +485,7 @@ export const startWorkers = () => {
             saveTranscript({
               id: crypto.randomUUID(),
               video_id: id,
-              type: 'whisper',
+              type: transcriptData.source || 'whisper',
               content: transcriptData,
               created_at: new Date().toISOString()
             });

@@ -11,10 +11,11 @@ import researchRoutes from './routes/research';
 import aiRoutes from './routes/ai';
 import channelsRoutes from './routes/channels';
 import projectRoutes from './routes/projects';
+import settingsRoutes from './routes/settings';
 
 const fastify = Fastify({ logger: true });
 
-fastify.addHook('onRequest', async (request, reply) => {
+fastify.addHook('onRequest', async (request, _reply) => {
   console.log(`[REQUEST] ${request.method} ${request.url}`);
 });
 
@@ -30,6 +31,7 @@ fastify.register(researchRoutes, { prefix: '/api' });
 fastify.register(aiRoutes, { prefix: '/api' });
 fastify.register(channelsRoutes, { prefix: '/api' });
 fastify.register(projectRoutes, { prefix: '/api' });
+fastify.register(settingsRoutes, { prefix: '/api' });
 
 // Serve Static Files (Frontend)
 fastify.register(fastifyStatic, {
