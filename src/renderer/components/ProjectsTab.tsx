@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { Folder, Plus, Trash2, Video, FileText, ChevronRight, MoreVertical } from 'lucide-react';
 import { ProjectDetail } from './ProjectDetail';
+import { api } from '../api';
 
 interface Project {
     id: string;
@@ -23,9 +24,8 @@ export const ProjectsTab = () => {
 
     const fetchProjects = async () => {
         try {
-            const res = await fetch('http://localhost:3000/projects');
-            const data = await res.json();
-            setProjects(data);
+            const res = await api.get('/projects');
+            setProjects(res.data);
         } catch (error) {
             console.error('Failed to fetch projects:', error);
         } finally {
@@ -40,13 +40,8 @@ export const ProjectsTab = () => {
     const handleCreateProject = async () => {
         if (!newProjectName) return;
         try {
-            const res = await fetch('http://localhost:3000/projects', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name: newProjectName, description: newProjectDesc })
-            });
-            const project = await res.json();
-            setProjects([project, ...projects]);
+            const res = await api.post('/projects', { name: newProjectName, description: newProjectDesc });
+            setProjects([res.data, ...projects]);
             setShowCreateModal(false);
             setNewProjectName('');
             setNewProjectDesc('');
@@ -59,7 +54,7 @@ export const ProjectsTab = () => {
         e.stopPropagation();
         if (!confirm('Are you sure? This will delete the project structure.')) return;
         try {
-            await fetch(`http://localhost:3000/projects/${id}`, { method: 'DELETE' });
+            await api.delete(`/projects/${id}`);
             setProjects(projects.filter(p => p.id !== id));
             if (selectedProject?.id === id) setSelectedProject(null);
         } catch (error) {

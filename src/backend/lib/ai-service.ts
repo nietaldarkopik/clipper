@@ -247,7 +247,7 @@ export class OpenAIService implements AIService {
     this.client = new OpenAI({ apiKey });
   }
 
-  async transcribeAudio(filePath: string, _onProgress?: (progress: number) => void, _onPartial?: (text: string) => void): Promise<any> {
+  async transcribeAudio(filePath: string, _modelSize?: string, _onProgress?: (progress: number) => void, _onPartial?: (text: string) => void): Promise<any> {
     try {
       const transcription = await this.client.audio.transcriptions.create({
         file: this.fs.createReadStream(filePath),

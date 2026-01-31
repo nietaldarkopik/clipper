@@ -52,7 +52,7 @@ import {
   Square,
   Film
 } from 'lucide-react';
-import { downloadVideo, analyzeVideo, getJobStatus, getTrendingVideos, searchVideos, generateAIMetadata, uploadVideo, getChannels, addChannel, deleteChannel, getChannelVideos, cancelDownload, retryDownload } from './api';
+import { api, downloadVideo, analyzeVideo, getJobStatus, getTrendingVideos, searchVideos, generateAIMetadata, uploadVideo, getChannels, addChannel, deleteChannel, getChannelVideos, cancelDownload, retryDownload } from './api';
 import { VideoDetailsModal } from './VideoDetailsModal';
 import { ProjectsTab } from './components/ProjectsTab';
 
@@ -78,8 +78,8 @@ const LibraryTab = ({ setCurrentFilePath, setCurrentVideoId, setActiveTab, setTr
 
     useEffect(() => {
         const fetchVideos = () => {
-            fetch('http://localhost:3000/library/videos')
-                .then(res => res.json())
+            api.get('/library/videos')
+                .then(res => res.data)
                 .then(data => {
                     setVideos(data.videos || []);
                     setIsLoading(false);
@@ -98,7 +98,7 @@ const LibraryTab = ({ setCurrentFilePath, setCurrentVideoId, setActiveTab, setTr
     const handleDelete = async (id: string) => {
         if (!confirm('Are you sure you want to delete this video?')) return;
         try {
-            await fetch(`http://localhost:3000/library/videos/${id}`, { method: 'DELETE' });
+            await api.delete(`/library/videos/${id}`);
             setVideos(videos.filter(v => v.id !== id));
         } catch (err) {
             alert('Failed to delete');
@@ -199,8 +199,8 @@ const LibraryTab = ({ setCurrentFilePath, setCurrentVideoId, setActiveTab, setTr
                                         // Or keep 'editor' as default. Let's keep 'editor' but make sure data is loaded.
                                         
                                         // Fetch transcript if needed
-                                        fetch(`http://localhost:3000/library/videos/${video.id}/transcript`)
-                                            .then(res => res.json())
+                                        api.get(`/library/videos/${video.id}/transcript`)
+                                            .then(res => res.data)
                                             .then(data => {
                                                 if (data.transcript && data.transcript.content) {
                                                     // Handle both raw string and JSON content

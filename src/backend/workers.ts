@@ -7,7 +7,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
 import crypto from 'crypto';
 import { getAIService } from './lib/ai-service';
-import { saveVideo, saveTranscript, saveClip, saveJob } from './lib/db';
+import { saveVideo, saveTranscript, saveClip, saveJob, getVideo } from './lib/db';
 
 // Check if ffmpegPath is valid
 if (ffmpegPath) {
@@ -451,13 +451,13 @@ export const startWorkers = () => {
                         accumulatedText += partialText + ' ';
                         // Update job data for frontend streaming
                         // We throttle updates slightly if needed, but for now direct update
-                        await job.update({ ...job.data, partialTranscript: accumulatedText });
+                        await job.updateData({ ...job.data, partialTranscript: accumulatedText });
                     });
                     await fs.writeJson(transcriptPath, { ...transcriptData, videoId: id, createdAt: new Date() }, { spaces: 2 });
                }
           }
           
-          const transcriptText = transcriptData.text;
+          // const transcriptText = transcriptData.text;
           job.updateProgress(100);
 
           // Save Transcript to DB

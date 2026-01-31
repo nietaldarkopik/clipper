@@ -39,7 +39,8 @@ import {
     deleteClip,
     getLibraryVideos,
     addVideoToProject,
-    generateAIMetadata
+    generateAIMetadata,
+    api
 } from '../api';
 
 interface Project {
@@ -131,8 +132,8 @@ export const ProjectDetail = ({ project: initialProject, onBack }: ProjectDetail
     }, [activeJob]);
 
     const refreshData = () => {
-        fetch(`http://localhost:3000/projects/${project.id}`)
-            .then(res => res.json())
+        api.get(`/projects/${project.id}`)
+            .then(res => res.data)
             .then(async (data) => {
                 setProject(data);
                 setVideos(data.videos || []);

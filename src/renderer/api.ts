@@ -1,6 +1,10 @@
 import axios from 'axios';
 
-const API_URL = 'http://localhost:3000';
+// Automatically detect base URL:
+// - If VITE_API_URL is set (via .env), use it
+// - Otherwise, default to relative path (empty string) for same-origin proxy
+const BASE_URL = import.meta.env.VITE_API_URL || '';
+const API_URL = `${BASE_URL}/api`;
 
 export const api = axios.create({
   baseURL: API_URL,
