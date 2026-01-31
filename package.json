@@ -8,7 +8,9 @@
     "dev:backend": "tsx watch src/backend/server.ts",
     "dev:renderer": "vite",
     "dev:main": "wait-on tcp:5173 tcp:3000 && tsc -p tsconfig.main.json && electron .",
-    "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.backend.json && vite build && electron-builder",
+    "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.backend.json && node scripts/copy-worker.js && vite build && electron-builder",
+    "build:web": "tsc -p tsconfig.backend.json && node scripts/copy-worker.js && vite build",
+    "start": "cross-env NODE_ENV=production node dist/backend/server.js",
     "lint": "eslint ."
   },
   "keywords": [],
