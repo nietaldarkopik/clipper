@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { getAIService } from '../lib/ai-service';
+import { Readable } from 'stream';
 
 export default async function aiRoutes(fastify: FastifyInstance) {
   
@@ -24,7 +25,7 @@ export default async function aiRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/ai/generate-summary', async (request, reply) => {
-    const { transcript } = request.body as { transcript: string };
+    const { transcript } = request.body as { transcript: string | any[] };
     
     if (!transcript) {
       return reply.code(400).send({ error: 'Transcript is required' });
@@ -32,7 +33,18 @@ export default async function aiRoutes(fastify: FastifyInstance) {
 
     try {
       const aiService = getAIService();
-      const summary = await aiService.generateSummary(transcript);
+      
+      if (Array.isArray(transcript)) {
+         if (aiService.generateSummaryStream) {
+             reply.type('text/plain');
+             const stream = Readable.from(aiService.generateSummaryStream(transcript));
+             return reply.send(stream);
+         } else {
+             return reply.code(400).send({ error: 'Service does not support streaming summary.' });
+         }
+       }
+
+      const summary = await aiService.generateSummary(transcript as string);
       return { summary };
     } catch (error: any) {
       console.error('AI Summary generation failed:', error);

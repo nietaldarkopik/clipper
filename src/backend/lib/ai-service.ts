@@ -17,6 +17,12 @@ if (ffmpegPath) {
 import axios from 'axios';
 import { getSettings } from './db';
 
+export interface TranscriptSegment {
+    start: number;
+    end: number;
+    text: string;
+}
+
 export interface AIMetadata {
   titles: string[];
   description: string;
@@ -29,49 +35,110 @@ export interface AIService {
   transcribeAudio(filePath: string, modelSize?: string, onProgress?: (progress: number) => void, onPartial?: (text: string) => void): Promise<any>;
   getHighlightsFromTranscript(transcript: string): Promise<any[]>;
   generateSummary(transcript: string): Promise<string>;
+  generateSummaryStream?(transcript: TranscriptSegment[]): AsyncGenerator<string>;
   generateScript(summary: string, style?: string): Promise<string>;
   generateSpeech(text: string, voice?: string): Promise<Buffer>;
 }
 
+function formatTime(seconds: number): string {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
 export class OllamaService implements AIService {
     private baseUrl: string;
+    private modelName: string;
 
-    constructor(baseUrl: string) {
+    constructor(baseUrl: string, modelName: string = 'llama3') {
         this.baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
+        this.modelName = modelName;
     }
 
     private async chat(messages: any[], jsonMode: boolean = false): Promise<string> {
         // Handle various URL formats
-        // If baseUrl ends with /chat, assume it's the full endpoint
-        // Otherwise append /api/chat
-        const url = this.baseUrl.includes('/chat') ? this.baseUrl : `${this.baseUrl}/api/chat`;
+        let url = this.baseUrl;
+        
+        // If the URL already ends with /api/chat, leave it (e.g. user pasted full endpoint)
+        if (url.endsWith('/api/chat')) {
+            // do nothing
+        } 
+        // If it ends with /api, append /chat
+        else if (url.endsWith('/api')) {
+            url = `${url}/chat`;
+        }
+        // If it looks like a base URL (no /chat), append /api/chat
+        else if (!url.includes('/chat')) {
+            url = `${url}/api/chat`;
+        }
         
         try {
             const payload: any = {
-                model: "llama3", // Default to llama3 or make configurable?
+                model: this.modelName, 
                 messages: messages,
-                stream: false,
+                stream: true,
             };
             
             if (jsonMode) {
                 payload.format = "json";
             }
 
-            // If user uses "ollama urlnya ke prof.unwim.ac.id/ai/chat", it might require specific headers or format.
-            // Assuming standard Ollama API compatibility.
+            console.log(`[Ollama] Sending request to ${url} with model ${this.modelName}`);
             
-            const response = await axios.post(url, payload);
+            const response = await axios.post(url, payload, {
+                responseType: 'stream'
+            });
             
-            if (response.data && response.data.message && response.data.message.content) {
-                return response.data.message.content;
-            } else if (response.data && response.data.response) {
-                 // Some older Ollama versions or /api/generate
-                 return response.data.response;
-            }
-            
-            throw new Error('Invalid response from Ollama');
+            return new Promise((resolve, reject) => {
+                let fullText = '';
+                let buffer = '';
+                
+                response.data.on('data', (chunk: Buffer) => {
+                    buffer += chunk.toString();
+                    
+                    let newlineIndex;
+                    while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+                        const line = buffer.slice(0, newlineIndex);
+                        buffer = buffer.slice(newlineIndex + 1);
+                        
+                        if (!line.trim()) continue;
+                        
+                        try {
+                            const json = JSON.parse(line);
+                            if (json.message && json.message.content) {
+                                fullText += json.message.content;
+                            } else if (json.response) {
+                                fullText += json.response;
+                            }
+                            
+                            if (json.error) {
+                                reject(new Error(json.error));
+                            }
+                        } catch (e) {
+                            // Ignore incomplete JSON chunks
+                        }
+                    }
+                });
+                
+                response.data.on('end', () => {
+                    resolve(fullText);
+                });
+                
+                response.data.on('error', (err: any) => {
+                    reject(err);
+                });
+            });
+
         } catch (error: any) {
-            console.error('Ollama request failed:', error.message);
+            console.error(`Ollama request failed for ${url} (model: ${this.modelName}):`, error.message);
+            if (error.response) {
+                console.error('Ollama response status:', error.response.status);
+                // Cannot read data easily from stream if it failed, but usually error response is not a stream
+                
+                if (error.response.status === 404) {
+                     throw new Error(`Ollama returned 404 Not Found. Please check: 1. Is the URL correct? (${url}) 2. Is the model '${this.modelName}' pulled?`);
+                }
+            }
             throw error;
         }
     }
@@ -138,6 +205,55 @@ export class OllamaService implements AIService {
         return this.chat([{ role: "user", content: prompt }]);
     }
 
+    async *generateSummaryStream(transcript: TranscriptSegment[]): AsyncGenerator<string> {
+        // Group by 3 minutes (180 seconds)
+        const chunks: TranscriptSegment[][] = [];
+        let currentChunk: TranscriptSegment[] = [];
+        let currentStartTime = 0;
+        const CHUNK_DURATION = 180;
+
+        // Sort by start time just in case
+        const sortedTranscript = [...transcript].sort((a, b) => a.start - b.start);
+
+        for (const segment of sortedTranscript) {
+            // If segment starts after current window, move window
+            while (segment.start >= currentStartTime + CHUNK_DURATION) {
+                if (currentChunk.length > 0) {
+                    chunks.push(currentChunk);
+                    currentChunk = [];
+                }
+                currentStartTime += CHUNK_DURATION;
+            }
+            currentChunk.push(segment);
+        }
+        if (currentChunk.length > 0) chunks.push(currentChunk);
+
+        yield `Found ${chunks.length} chunks (3 mins each) to process.\n\n`;
+
+        for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            const startTime = formatTime(chunk[0].start);
+            const endTime = formatTime(chunk[chunk.length - 1].end);
+            
+            yield `Processing Chunk ${i + 1}/${chunks.length} (${startTime} - ${endTime})...\n`;
+            
+            const chunkText = chunk.map(s => s.text).join(' ');
+            const prompt = `
+              Summarize this segment of a video transcript (${startTime} to ${endTime}).
+              Transcript Segment: "${chunkText}"
+              
+              Provide a concise summary of what happens in this segment.
+            `;
+            
+            try {
+                const summary = await this.chat([{ role: "user", content: prompt }]);
+                yield `Summary [${startTime}-${endTime}]:\n${summary}\n\n`;
+            } catch (err: any) {
+                 yield `Error processing chunk ${i + 1}: ${err.message}\n\n`;
+            }
+        }
+    }
+
     async generateScript(summary: string, style?: string): Promise<string> {
         const prompt = `
           Create a voice-over script based on this summary. The style should be ${style || 'engaging'}.
@@ -174,6 +290,14 @@ export class LocalWhisperService implements AIService {
 
     async generateSummary(transcript: string): Promise<string> {
         return this.textService.generateSummary(transcript);
+    }
+
+    async *generateSummaryStream(transcript: TranscriptSegment[]): AsyncGenerator<string> {
+        if (this.textService.generateSummaryStream) {
+            yield* this.textService.generateSummaryStream(transcript);
+        } else {
+            yield "Underlying service does not support streaming summary.";
+        }
     }
 
     async generateScript(summary: string, style?: string): Promise<string> {
@@ -412,6 +536,10 @@ export class OpenAIService implements AIService {
     }
   }
 
+  async *generateSummaryStream(transcript: TranscriptSegment[]): AsyncGenerator<string> {
+      yield "Streaming summary not implemented for OpenAI service yet.";
+  }
+
   async generateScript(summary: string, style: string = 'engaging'): Promise<string> {
     const prompt = `
       Create a voice-over script based on this summary. The style should be ${style}.
@@ -535,7 +663,8 @@ export const getAIService = (): AIService => {
     // Determine AI Provider
     if (settings.aiProvider === 'ollama') {
         const url = settings.ollamaUrl || 'http://localhost:11434';
-        textService = new OllamaService(url);
+        const model = settings.ollamaModel || 'llama3';
+        textService = new OllamaService(url, model);
     } else {
         // Default to OpenAI
         const apiKey = settings.openaiApiKey || process.env.OPENAI_API_KEY;

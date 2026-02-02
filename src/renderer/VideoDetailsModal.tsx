@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, FileText, Film, MessageSquare, Clock, ThumbsUp, Eye, User, Calendar, Loader2, Sparkles } from 'lucide-react';
-import { getVideo, getTranscripts, analyzeVideo } from './api';
+import { X, FileText, Film, MessageSquare, Clock, ThumbsUp, Eye, User, Calendar, Loader2, Sparkles, Play } from 'lucide-react';
+import { getVideo, getTranscripts, analyzeVideo, BASE_URL } from './api';
 
 interface VideoDetailsModalProps {
     videoId: string;
@@ -20,6 +20,7 @@ export const VideoDetailsModal = ({ videoId, onClose }: VideoDetailsModalProps) 
     const [loading, setLoading] = useState(true);
     const [analyzing, setAnalyzing] = useState(false);
     const [activeTab, setActiveTab] = useState<'info' | 'transcripts' | 'highlights'>('info');
+    const [isPlaying, setIsPlaying] = useState(false);
 
     const fetchData = async () => {
         try {
@@ -28,7 +29,7 @@ export const VideoDetailsModal = ({ videoId, onClose }: VideoDetailsModalProps) 
                 getTranscripts(videoId)
             ]);
             setVideo(videoData);
-            setTranscripts(transcriptsData.transcripts || []);
+            setTranscripts(transcriptsData || []);
         } catch (error) {
             console.error('Failed to fetch video details:', error);
         }
@@ -56,6 +57,20 @@ export const VideoDetailsModal = ({ videoId, onClose }: VideoDetailsModalProps) 
     };
 
     if (!videoId) return null;
+
+    // Helper to get video source URL
+    const getVideoSrc = (video: any) => {
+        if (!video) return '';
+        // If it's a local file path, convert to server URL
+        if (video.filepath && (video.filepath.includes('/') || video.filepath.includes('\\'))) {
+            const filename = video.filepath.split(/[\\/]/).pop();
+            // Assuming served under /downloads/ if it's a downloaded file
+            // We might need a more robust way to map paths to URLs if we have multiple static roots
+            // For now, we assume all local files are in downloads
+            return `${BASE_URL}/downloads/${filename}`;
+        }
+        return video.url;
+    };
 
     return (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-8">
@@ -107,12 +122,29 @@ export const VideoDetailsModal = ({ videoId, onClose }: VideoDetailsModalProps) 
                             {activeTab === 'info' && (
                                 <div className="space-y-6">
                                     <div className="aspect-video bg-black rounded-xl overflow-hidden mb-6 relative group">
-                                        <img src={video.thumbnail} alt={video.title} className="w-full h-full object-contain" />
-                                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
-                                            <a href={video.url} target="_blank" rel="noreferrer" className="bg-white text-black px-4 py-2 rounded-full font-bold hover:scale-105 transition">
-                                                Watch Original
-                                            </a>
-                                        </div>
+                                        {isPlaying ? (
+                                            <video 
+                                                src={getVideoSrc(video)} 
+                                                controls 
+                                                autoPlay 
+                                                className="w-full h-full object-contain"
+                                            />
+                                        ) : (
+                                            <>
+                                                <img src={video.thumbnail} alt={video.title} className="w-full h-full object-contain" />
+                                                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-3">
+                                                    <button 
+                                                        onClick={() => setIsPlaying(true)}
+                                                        className="bg-indigo-600 text-white px-6 py-2 rounded-full font-bold hover:scale-105 transition flex items-center gap-2 shadow-lg shadow-indigo-600/20"
+                                                    >
+                                                        <Play size={20} fill="currentColor" /> Play Video
+                                                    </button>
+                                                    <a href={video.url} target="_blank" rel="noreferrer" className="bg-white/10 backdrop-blur text-white px-4 py-2 rounded-full font-bold hover:bg-white/20 transition text-sm">
+                                                        Open Link
+                                                    </a>
+                                                </div>
+                                            </>
+                                        )}
                                     </div>
                                     
                                     <div>

@@ -24,6 +24,29 @@ export default async function libraryRoutes(fastify: FastifyInstance) {
     return { ...video, clips };
   });
 
+  fastify.put('/library/videos/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const updates = request.body as any;
+    
+    const video = getVideo(id);
+    if (!video) return reply.code(404).send({ error: 'Video not found' });
+
+    try {
+        // Prevent ID modification
+        delete updates.id;
+        
+        // Merge updates
+        const updatedVideo = { ...video, ...updates };
+        const { saveVideo } = await import('../lib/db');
+        saveVideo(updatedVideo);
+        
+        return updatedVideo;
+    } catch (error) {
+        console.error('Failed to update video:', error);
+        return reply.code(500).send({ error: 'Failed to update video' });
+    }
+  });
+
   fastify.delete('/library/videos/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
     try {

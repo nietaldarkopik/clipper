@@ -17,6 +17,7 @@ const defaultData = {
     aiProvider: 'openai', // 'openai' | 'ollama'
     openaiApiKey: '',
     ollamaUrl: 'http://localhost:11434',
+    ollamaModel: 'llama3',
     backendUrl: 'http://localhost:3000',
     transcriptionMethod: 'auto', // 'auto' | 'youtube' | 'whisper'
     whisperModel: 'tiny',
@@ -110,7 +111,7 @@ export const getTranscripts = (videoId: string) => {
 // Settings
 export const getSettings = () => {
   const db = readDB();
-  return db.settings || defaultData.settings;
+  return { ...defaultData.settings, ...(db.settings || {}) };
 };
 
 export const updateSettings = (settings: any) => {
@@ -138,6 +139,11 @@ export const getClips = (videoId: string) => {
   return db.clips.filter((c: any) => c.video_id === videoId).sort((a: any, b: any) => a.start_time - b.start_time);
 };
 
+export const getClip = (id: string) => {
+  const db = readDB();
+  return db.clips.find((c: any) => c.id === id);
+};
+
 export const deleteClip = (id: string) => {
   const db = readDB();
   db.clips = db.clips.filter((c: any) => c.id !== id);
@@ -151,9 +157,9 @@ export const saveProject = (project: any) => {
   const idx = findIndex(db.projects || [], project.id);
   const newProject = { ...project, updated_at: new Date().toISOString() };
   if (!newProject.created_at) newProject.created_at = new Date().toISOString();
-  
+
   if (!db.projects) db.projects = [];
-  
+
   if (idx >= 0) {
     db.projects[idx] = { ...db.projects[idx], ...newProject };
   } else {
@@ -228,10 +234,10 @@ export const getChannels = () => {
 export const saveChannel = (channel: any) => {
   const db = readDB();
   if (!db.channels) db.channels = [];
-  
+
   const idx = findIndex(db.channels, channel.id);
   const newChannel = { ...channel, created_at: channel.created_at || new Date().toISOString() };
-  
+
   if (idx >= 0) {
     db.channels[idx] = { ...db.channels[idx], ...newChannel };
   } else {

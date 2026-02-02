@@ -206,5 +206,9 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 node_modules
+projects/
+transcripts/
+processed/
 dist
 .env
+data/db.json

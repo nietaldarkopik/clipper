@@ -3,245 +3,307 @@ import path from 'path';
 import { downloadQueue, analyzeQueue, processQueue, uploadQueue } from '../queues';
 import { v4 as uuidv4 } from 'uuid';
 import { cancelDownloadJob } from '../workers';
-import { getSettings, getVideo, saveVideo, saveClip, deleteClip } from '../lib/db';
+import { getSettings, getVideo, saveVideo, saveClip, deleteClip, getClip } from '../lib/db';
+import fs from 'fs-extra';
+import { pipeline } from 'stream';
+import util from 'util';
+
+const pump = util.promisify(pipeline);
 
 export default async function videoRoutes(fastify: FastifyInstance) {
-  
-  // POST /video/download
-  fastify.post('/video/download', async (request, reply) => {
-    const { url, projectId, downloadSubtitles } = request.body as { url: string, projectId?: string, downloadSubtitles?: boolean };
-    if (!url) {
-      return reply.code(400).send({ error: 'URL is required' });
-    }
 
-    const id = uuidv4();
-    
-    // Save initial video record with downloading status
-    try {
+    // POST /video/download
+    fastify.post('/video/download', async (request, reply) => {
+        const { url, projectId, downloadSubtitles } = request.body as { url: string, projectId?: string, downloadSubtitles?: boolean };
+        if (!url) {
+            return reply.code(400).send({ error: 'URL is required' });
+        }
+
+        const id = uuidv4();
+
+        // Save initial video record with downloading status
+        try {
+            saveVideo({
+                id,
+                url,
+                filepath: '', // Will be updated later
+                source: 'youtube', // Assuming youtube for now, can be detected
+                title: 'Downloading...',
+                created_at: new Date().toISOString(),
+                status: 'downloading',
+                progress: 0,
+                project_id: projectId // Associate with project if provided
+            });
+        } catch (e) {
+            console.error('Failed to save initial video record:', e);
+        }
+
+        await downloadQueue.add('download-video', { url, id, projectId, downloadSubtitles }, { jobId: id });
+
+        return { status: 'queued', jobId: id, message: 'Download started' };
+    });
+
+    // POST /video/download/:id/cancel
+    fastify.post('/video/download/:id/cancel', async (request, _reply) => {
+        const { id } = request.params as { id: string };
+
+        // 1. Try to kill the active process
+        cancelDownloadJob(id);
+
+        // 2. Remove from queue if pending
+        const job = await downloadQueue.getJob(id);
+        if (job) {
+            if (await job.isActive()) {
+                // It might be killed by cancelDownloadJob, but we ensure it fails/stops
+                await job.discard();
+                // Ideally we should move it to failed or remove it?
+                // Calling moveToFailed won't kill process, but we did that.
+                await job.moveToFailed(new Error('Cancelled by user'), id);
+            } else if (await job.isWaiting()) {
+                await job.remove();
+            }
+        }
+
+        // 3. Update DB status
+        const video = getVideo(id);
+        if (video) {
+            saveVideo({ ...video, status: 'cancelled', progress: 0 });
+        }
+
+        return { success: true, message: 'Download cancelled' };
+    });
+
+    // POST /video/download/:id/retry
+    fastify.post('/video/download/:id/retry', async (request, reply) => {
+        const { id } = request.params as { id: string };
+        const video = getVideo(id);
+
+        if (!video || !video.url) {
+            return reply.code(404).send({ error: 'Video not found or missing URL' });
+        }
+
+        // Reset status
+        saveVideo({ ...video, status: 'downloading', progress: 0, title: 'Downloading...' });
+
+        // Add to queue again
+        // We might need to remove old job if it exists in failed state to reuse ID
+        const oldJob = await downloadQueue.getJob(id);
+        if (oldJob) {
+            await oldJob.remove();
+        }
+
+        await downloadQueue.add('download-video', { url: video.url, id }, { jobId: id });
+
+        return { status: 'queued', jobId: id, message: 'Download retried' };
+    });
+
+    // POST /video/upload
+    fastify.post('/video/upload', async (request, reply) => {
+        const { filePath, platform, metadata, projectId } = request.body as { filePath: string, platform: string, metadata: any, projectId?: string };
+
+        if (!filePath) {
+            return reply.code(400).send({ error: 'FilePath is required' });
+        }
+
+        // If projectId is provided, we treat this as "Add to Project" (Import)
+        // We don't necessarily upload to a platform, but we register it in the DB
+
+        const id = uuidv4();
+
+        // Check if we are uploading to a platform or just importing to project
+        // If platform is not provided, we assume local import
+
+        if (projectId) {
+            saveVideo({
+                id,
+                url: filePath, // Use file path as URL for local files
+                filepath: filePath,
+                source: 'local_upload',
+                title: path.basename(filePath),
+                created_at: new Date().toISOString(),
+                status: 'completed', // Local files are ready immediately
+                progress: 100,
+                project_id: projectId
+            });
+            return { status: 'completed', jobId: id, message: 'Video imported to project' };
+        }
+
+        if (!platform) {
+            return reply.code(400).send({ error: 'Platform is required for social upload' });
+        }
+
+        // ... existing upload logic for social media ...
+
+        await uploadQueue.add('upload-video', { filePath, platform, metadata }, { jobId: id });
+        return { status: 'queued', jobId: id, message: 'Upload started' };
+    });
+
+    // POST /video/upload-file
+    fastify.post('/video/upload-file', async (request, reply) => {
+        const data = await request.file();
+        if (!data) {
+            return reply.code(400).send({ error: 'No file uploaded' });
+        }
+
+        const id = uuidv4();
+        const filename = `${id}_${data.filename}`;
+        const uploadDir = path.join(process.cwd(), 'downloads'); // Reuse downloads folder
+        await fs.ensureDir(uploadDir);
+
+        const filepath = path.join(uploadDir, filename);
+
+        await pump(data.file, fs.createWriteStream(filepath));
+
+        // Save to DB
         saveVideo({
             id,
-            url,
-            filepath: '', // Will be updated later
-            source: 'youtube', // Assuming youtube for now, can be detected
-            title: 'Downloading...',
+            url: filepath,
+            filepath: filepath,
+            source: 'webcam_record',
+            title: `Recording ${new Date().toLocaleString()}`,
             created_at: new Date().toISOString(),
-            status: 'downloading',
-            progress: 0,
-            project_id: projectId // Associate with project if provided
-        });
-    } catch (e) {
-        console.error('Failed to save initial video record:', e);
-    }
-
-    await downloadQueue.add('download-video', { url, id, projectId, downloadSubtitles }, { jobId: id });
-    
-    return { status: 'queued', jobId: id, message: 'Download started' };
-  });
-
-  // POST /video/download/:id/cancel
-  fastify.post('/video/download/:id/cancel', async (request, _reply) => {
-    const { id } = request.params as { id: string };
-    
-    // 1. Try to kill the active process
-    cancelDownloadJob(id);
-    
-    // 2. Remove from queue if pending
-    const job = await downloadQueue.getJob(id);
-    if (job) {
-        if (await job.isActive()) {
-             // It might be killed by cancelDownloadJob, but we ensure it fails/stops
-             await job.discard(); 
-             // Ideally we should move it to failed or remove it?
-             // Calling moveToFailed won't kill process, but we did that.
-             await job.moveToFailed(new Error('Cancelled by user'), id);
-        } else if (await job.isWaiting()) {
-            await job.remove();
-        }
-    }
-
-    // 3. Update DB status
-    const video = getVideo(id);
-    if (video) {
-        saveVideo({ ...video, status: 'cancelled', progress: 0 });
-    }
-
-    return { success: true, message: 'Download cancelled' };
-  });
-
-  // POST /video/download/:id/retry
-  fastify.post('/video/download/:id/retry', async (request, reply) => {
-      const { id } = request.params as { id: string };
-      const video = getVideo(id);
-      
-      if (!video || !video.url) {
-          return reply.code(404).send({ error: 'Video not found or missing URL' });
-      }
-
-      // Reset status
-      saveVideo({ ...video, status: 'downloading', progress: 0, title: 'Downloading...' });
-
-      // Add to queue again
-      // We might need to remove old job if it exists in failed state to reuse ID
-      const oldJob = await downloadQueue.getJob(id);
-      if (oldJob) {
-          await oldJob.remove();
-      }
-
-      await downloadQueue.add('download-video', { url: video.url, id }, { jobId: id });
-      
-      return { status: 'queued', jobId: id, message: 'Download retried' };
-  });
-
-  // POST /video/upload
-  fastify.post('/video/upload', async (request, reply) => {
-    const { filePath, platform, metadata, projectId } = request.body as { filePath: string, platform: string, metadata: any, projectId?: string };
-    
-    if (!filePath) {
-        return reply.code(400).send({ error: 'FilePath is required' });
-    }
-
-    // If projectId is provided, we treat this as "Add to Project" (Import)
-    // We don't necessarily upload to a platform, but we register it in the DB
-    
-    const id = uuidv4();
-    
-    // Check if we are uploading to a platform or just importing to project
-    // If platform is not provided, we assume local import
-    
-    if (projectId) {
-         saveVideo({
-            id,
-            url: filePath, // Use file path as URL for local files
-            filepath: filePath,
-            source: 'local_upload',
-            title: path.basename(filePath),
-            created_at: new Date().toISOString(),
-            status: 'completed', // Local files are ready immediately
+            status: 'completed',
             progress: 100,
-            project_id: projectId
+            duration: 0 // Duration unknown initially unless we probe it, but ok for now
         });
-        return { status: 'completed', jobId: id, message: 'Video imported to project' };
-    }
 
-    if (!platform) {
-         return reply.code(400).send({ error: 'Platform is required for social upload' });
-     }
-     
-     // ... existing upload logic for social media ...
- 
-     await uploadQueue.add('upload-video', { filePath, platform, metadata }, { jobId: id });
-    return { status: 'queued', jobId: id, message: 'Upload started' };
-  });
+        return { status: 'completed', id, filepath, message: 'File uploaded successfully' };
+    });
 
-  // POST /video/analyze
-  fastify.post('/video/analyze', async (request, reply) => {
-    let { id, modelSize, method } = request.body as { id: string, modelSize?: string, method?: 'youtube' | 'whisper' | 'auto' };
-    
-    // Apply defaults from settings
-    const settings = getSettings();
-    
-    if (!method) {
-        method = settings.transcriptionMethod || 'auto';
-    }
-    
-    if (!modelSize && method !== 'youtube') {
-        modelSize = settings.whisperModel || 'tiny';
-    }
+    // POST /video/analyze
+    fastify.post('/video/analyze', async (request, reply) => {
+        let { id, modelSize, method } = request.body as { id: string, modelSize?: string, method?: 'youtube' | 'whisper' | 'auto' };
 
-    console.log(`[API] /video/analyze request received: id=${id}, modelSize=${modelSize}, method=${method}`);
-    
-    if (!id) {
-        return reply.code(400).send({ error: 'Video ID is required' });
-    }
+        // Apply defaults from settings
+        const settings = getSettings();
 
-    try {
-        const job = await analyzeQueue.add('analyze-video', { id, modelSize, method });
-        console.log(`[API] Analysis job queued: jobId=${job.id}`);
-        return { status: 'queued', jobId: job.id, message: 'Analysis started' };
-    } catch (error) {
-        console.error(`[API] Failed to queue analysis job:`, error);
-        return reply.code(500).send({ error: 'Failed to start analysis' });
-    }
-  });
+        if (!method) {
+            method = settings.transcriptionMethod || 'auto';
+        }
 
-  // POST /editor/clip
-  fastify.post('/editor/clip', async (request, reply) => {
-      const { id, startTime, duration } = request.body as { id: string, startTime: number, duration: number };
-      
-      if (!id || startTime === undefined || !duration) {
-          return reply.code(400).send({ error: 'Missing parameters' });
-      }
+        if (!modelSize && method !== 'youtube') {
+            modelSize = settings.whisperModel || 'tiny';
+        }
 
-      const job = await processQueue.add('process-clip', { id, startTime, duration });
-      return { status: 'queued', jobId: job.id, message: 'Clipping started' };
-  });
+        console.log(`[API] /video/analyze request received: id=${id}, modelSize=${modelSize}, method=${method}`);
 
-  // POST /editor/merge
-  fastify.post('/editor/merge', async (request, reply) => {
-      const { filePaths, projectId, outputName } = request.body as { filePaths: string[], projectId: string, outputName: string };
-      
-      if (!filePaths || !Array.isArray(filePaths) || filePaths.length === 0) {
-          return reply.code(400).send({ error: 'filePaths array is required' });
-      }
+        if (!id) {
+            return reply.code(400).send({ error: 'Video ID is required' });
+        }
 
-      const job = await processQueue.add('merge-clips', { filePaths, projectId, outputName });
-      return { status: 'queued', jobId: job.id, message: 'Merge started' };
-  });
+        try {
+            const job = await analyzeQueue.add('analyze-video', { id, modelSize, method });
+            console.log(`[API] Analysis job queued: jobId=${job.id}`);
+            return { status: 'queued', jobId: job.id, message: 'Analysis started' };
+        } catch (error) {
+            console.error(`[API] Failed to queue analysis job:`, error);
+            return reply.code(500).send({ error: 'Failed to start analysis' });
+        }
+    });
 
-  // POST /editor/clips/batch
-  fastify.post('/editor/clips/batch', async (request, reply) => {
-      const { clips, videoId } = request.body as { clips: any[], videoId: string };
-      
-      if (!clips || !Array.isArray(clips) || !videoId) {
-          return reply.code(400).send({ error: 'clips array and videoId are required' });
-      }
+    // POST /editor/clip
+    fastify.post('/editor/clip', async (request, reply) => {
+        const { id, startTime, duration, clipId } = request.body as { id: string, startTime: number, duration: number, clipId?: string };
 
-      const savedClips = clips.map(clip => {
-          const id = uuidv4();
-          const newClip = {
-              id,
-              video_id: videoId,
-              label: clip.title || 'Highlight',
-              description: clip.description,
-              start_time: clip.start_time,
-              end_time: clip.end_time,
-              created_at: new Date().toISOString()
-          };
-          saveClip(newClip);
-          return newClip;
-      });
+        if (!id || startTime === undefined || !duration) {
+            return reply.code(400).send({ error: 'Missing parameters' });
+        }
 
-      return { success: true, clips: savedClips };
-  });
+        const job = await processQueue.add('process-clip', { id, startTime, duration, clipId });
+        return { status: 'queued', jobId: job.id, message: 'Clipping started' };
+    });
 
-  // DELETE /editor/clips/:id
-  fastify.delete('/editor/clips/:id', async (request, _reply) => {
-      const { id } = request.params as { id: string };
-      deleteClip(id);
-      return { success: true };
-  });
+    // POST /editor/merge
+    fastify.post('/editor/merge', async (request, reply) => {
+        const { filePaths, projectId, outputName } = request.body as { filePaths: string[], projectId: string, outputName: string };
 
-  // GET /dashboard/status (Simple status check for a job)
-  fastify.get('/dashboard/status/:queueName/:jobId', async (request, reply) => {
-      const { queueName, jobId } = request.params as { queueName: string, jobId: string };
-      
-      let queue;
-      if (queueName === 'download') queue = downloadQueue;
-      else if (queueName === 'analyze') queue = analyzeQueue;
-      else if (queueName === 'process') queue = processQueue;
-      else if (queueName === 'upload') queue = uploadQueue;
-      else return reply.code(400).send({ error: 'Invalid queue name' });
+        if (!filePaths || !Array.isArray(filePaths) || filePaths.length === 0) {
+            return reply.code(400).send({ error: 'filePaths array is required' });
+        }
 
-      const job = await queue.getJob(jobId);
-      if (!job) {
-          return reply.code(404).send({ error: 'Job not found' });
-      }
+        const job = await processQueue.add('merge-clips', { filePaths, projectId, outputName });
+        return { status: 'queued', jobId: job.id, message: 'Merge started' };
+    });
 
-      const state = await job.getState();
-      const result = job.returnvalue;
-      const progress = job.progress;
-      const data = job.data;
+    // POST /editor/clips/batch
+    fastify.post('/editor/clips/batch', async (request, reply) => {
+        const { clips, videoId } = request.body as { clips: any[], videoId: string };
 
-      return { id: jobId, state, progress, result, data };
-  });
+        if (!clips || !Array.isArray(clips) || !videoId) {
+            return reply.code(400).send({ error: 'clips array and videoId are required' });
+        }
+
+        const savedClips = clips.map(clip => {
+            const id = uuidv4();
+            const newClip = {
+                id,
+                video_id: videoId,
+                label: clip.title || 'Highlight',
+                description: clip.description,
+                start_time: clip.start_time,
+                end_time: clip.end_time,
+                created_at: new Date().toISOString()
+            };
+            saveClip(newClip);
+            return newClip;
+        });
+
+        return { success: true, clips: savedClips };
+    });
+
+    // DELETE /editor/clips/:id
+    fastify.delete('/editor/clips/:id', async (request, _reply) => {
+        const { id } = request.params as { id: string };
+        deleteClip(id);
+        return { success: true };
+    });
+
+    // POST /editor/clips/:id/unprocess
+    fastify.post('/editor/clips/:id/unprocess', async (request, reply) => {
+        const { id } = request.params as { id: string };
+
+        const clip = getClip(id);
+        if (!clip) {
+            return reply.code(404).send({ error: 'Clip not found' });
+        }
+
+        if (clip.filepath) {
+            try {
+                if (await fs.pathExists(clip.filepath)) {
+                    await fs.unlink(clip.filepath);
+                }
+            } catch (e) {
+                console.error(`Failed to delete clip file: ${clip.filepath}`, e);
+                // We continue to update DB even if file deletion fails (maybe already gone)
+            }
+
+            saveClip({ ...clip, filepath: null });
+        }
+
+        return { success: true, message: 'Clip unprocessed' };
+    });
+
+    // GET /dashboard/status (Simple status check for a job)
+    fastify.get('/dashboard/status/:queueName/:jobId', async (request, reply) => {
+        const { queueName, jobId } = request.params as { queueName: string, jobId: string };
+
+        let queue;
+        if (queueName === 'download') queue = downloadQueue;
+        else if (queueName === 'analyze') queue = analyzeQueue;
+        else if (queueName === 'process') queue = processQueue;
+        else if (queueName === 'upload') queue = uploadQueue;
+        else return reply.code(400).send({ error: 'Invalid queue name' });
+
+        const job = await queue.getJob(jobId);
+        if (!job) {
+            return reply.code(404).send({ error: 'Job not found' });
+        }
+
+        const state = await job.getState();
+        const result = job.returnvalue;
+        const progress = job.progress;
+        const data = job.data;
+
+        return { id: jobId, state, progress, result, data };
+    });
 }
