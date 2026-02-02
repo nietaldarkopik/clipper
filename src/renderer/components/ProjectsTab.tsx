@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { Folder, Plus, Trash2, Video, FileText, ChevronRight, MoreVertical } from 'lucide-react';
+import { Folder, Plus, Trash2, Video, FileText, ChevronRight, MoreVertical, Sparkles, Loader2, Play } from 'lucide-react';
 import { ProjectDetail } from './ProjectDetail';
-import { api } from '../api';
+import { api, runAutoProcess, getJobStatus } from '../api';
 
 interface Project {
     id: string;
@@ -25,13 +25,24 @@ export const ProjectsTab = ({ onOpenEditor }: ProjectsTabProps) => {
     const [newProjectName, setNewProjectName] = useState('');
     const [newProjectDesc, setNewProjectDesc] = useState('');
     const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+    const [showAutoModal, setShowAutoModal] = useState(false);
+    const [autoKeyword, setAutoKeyword] = useState('trending indonesia');
+    const [autoCount, setAutoCount] = useState(3);
+    const [autoPlatform, setAutoPlatform] = useState('youtube');
+    const [isAutoRunning, setIsAutoRunning] = useState(false);
+    const [autoJobId, setAutoJobId] = useState<string | null>(null);
+    const [autoProgress, setAutoProgress] = useState(0);
+    const [autoLogs, setAutoLogs] = useState<string>('');
 
     const fetchProjects = async () => {
         try {
             const res = await api.get('/projects');
-            setProjects(res.data);
+            // Handle both direct array and { projects: [] } formats
+            const data = Array.isArray(res.data) ? res.data : (res.data?.projects || []);
+            setProjects(data);
         } catch (error) {
             console.error('Failed to fetch projects:', error);
+            setProjects([]);
         } finally {
             setIsLoading(false);
         }
@@ -66,6 +77,64 @@ export const ProjectsTab = ({ onOpenEditor }: ProjectsTabProps) => {
         }
     };
 
+    const handleRunAuto = async () => {
+        setIsAutoRunning(true);
+        setAutoProgress(0);
+        setAutoLogs('Initializing automated workflow...');
+        try {
+            // Create a project for this auto run if needed, or just run globally.
+            // Let's create a project automatically.
+            const projectRes = await api.post('/projects', {
+                name: `Auto: ${autoKeyword}`,
+                description: `Automated processing for ${autoKeyword} at ${new Date().toLocaleString()}`
+            });
+            const projectId = projectRes.data.id;
+
+            const res = await runAutoProcess({
+                keyword: autoKeyword,
+                count: autoCount,
+                platform: autoPlatform,
+                projectId
+            });
+            setAutoJobId(res.jobId);
+        } catch (error) {
+            console.error('Failed to run auto clipper:', error);
+            alert('Failed to start auto clipper');
+            setIsAutoRunning(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!autoJobId) return;
+
+        const interval = setInterval(async () => {
+            try {
+                const status = await getJobStatus('auto', autoJobId);
+                setAutoProgress(status.progress || 0);
+
+                if (status.data && status.data.logs) {
+                    setAutoLogs(status.data.logs);
+                }
+
+                if (status.state === 'completed' || status.state === 'failed') {
+                    setAutoJobId(null);
+                    setIsAutoRunning(false);
+                    setShowAutoModal(false);
+                    fetchProjects(); // Refresh projects to show the new one
+                    if (status.state === 'completed') {
+                        alert('Auto Clipper completed successfully!');
+                    } else {
+                        alert('Auto Clipper failed.');
+                    }
+                }
+            } catch (e) {
+                console.error("Error polling auto job:", e);
+            }
+        }, 2000);
+
+        return () => clearInterval(interval);
+    }, [autoJobId]);
+
     if (selectedProject) {
         return <ProjectDetail project={selectedProject} onBack={() => {
             setSelectedProject(null);
@@ -80,12 +149,20 @@ export const ProjectsTab = ({ onOpenEditor }: ProjectsTabProps) => {
                     <h2 className="text-2xl font-bold text-slate-100">Projects</h2>
                     <p className="text-slate-400">Manage your film recap projects</p>
                 </div>
-                <button
-                    onClick={() => setShowCreateModal(true)}
-                    className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition"
-                >
-                    <Plus size={18} /> New Project
-                </button>
+                <div className="flex gap-2">
+                    <button
+                        onClick={() => setShowAutoModal(true)}
+                        className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg transition"
+                    >
+                        <Sparkles size={18} /> Auto Clipper (AI)
+                    </button>
+                    <button
+                        onClick={() => setShowCreateModal(true)}
+                        className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition"
+                    >
+                        <Plus size={18} /> New Project
+                    </button>
+                </div>
             </div>
 
             {isLoading ? (
@@ -178,6 +255,119 @@ export const ProjectsTab = ({ onOpenEditor }: ProjectsTabProps) => {
                                 className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition"
                             >
                                 Create Project
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Auto Clipper Modal */}
+            {showAutoModal && (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                    <div className="bg-slate-800 rounded-xl p-6 w-full max-w-lg border border-slate-700 shadow-2xl">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="p-2 bg-emerald-500/20 rounded-lg text-emerald-400">
+                                <Sparkles size={24} />
+                            </div>
+                            <h3 className="text-xl font-bold text-white">Magic AI Auto Clipper</h3>
+                        </div>
+
+                        <p className="text-slate-400 text-sm mb-6">
+                            Enter a keyword to find viral content. AI will automatically search, download, find highlights, create clips, and generate metadata.
+                        </p>
+
+                        <div className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-slate-400 mb-1">Search Keyword (Target Indonesia)</label>
+                                <input
+                                    type="text"
+                                    value={autoKeyword}
+                                    onChange={(e) => setAutoKeyword(e.target.value)}
+                                    className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-emerald-500"
+                                    placeholder="e.g. masak viral, lucu banget, trending indonesia"
+                                    disabled={isAutoRunning}
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-400 mb-1">Platform</label>
+                                    <select
+                                        value={autoPlatform}
+                                        onChange={(e) => setAutoPlatform(e.target.value)}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-emerald-500"
+                                        disabled={isAutoRunning}
+                                    >
+                                        <option value="youtube">YouTube</option>
+                                        <option value="tiktok">TikTok (Search)</option>
+                                        <option value="instagram">Instagram (Search)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-400 mb-1">Video Count</label>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        max="10"
+                                        value={autoCount}
+                                        onChange={(e) => setAutoCount(parseInt(e.target.value))}
+                                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-emerald-500"
+                                        disabled={isAutoRunning}
+                                    />
+                                </div>
+                            </div>
+
+                            {isAutoRunning && (
+                                <div className="pt-4">
+                                    <div className="flex justify-between text-xs text-slate-400 mb-2">
+                                        <span>AI is processing your request...</span>
+                                        <span>{autoProgress}%</span>
+                                    </div>
+                                    <div className="w-full bg-slate-700 rounded-full h-2">
+                                        <div
+                                            className="bg-emerald-500 h-2 rounded-full transition-all duration-500"
+                                            style={{ width: `${autoProgress}%` }}
+                                        ></div>
+                                    </div>
+                                    <p className="text-[10px] text-slate-500 mt-2 italic text-center">
+                                        This involves searching, downloading, transcribing, and clipping. It may take a few minutes.
+                                    </p>
+                                </div>
+                            )}
+
+                            {(isAutoRunning || autoLogs) && (
+                                <div className="mt-4">
+                                    <label className="block text-xs font-medium text-slate-500 mb-1">Process Details</label>
+                                    <div className="bg-black/50 border border-slate-700 rounded-lg p-3 h-48 overflow-y-auto font-mono text-[10px] text-emerald-400 whitespace-pre-wrap">
+                                        {autoLogs || 'Waiting for output...'}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex justify-end gap-3 mt-8">
+                            {!isAutoRunning && (
+                                <button
+                                    onClick={() => setShowAutoModal(false)}
+                                    className="px-4 py-2 text-slate-400 hover:text-white transition"
+                                >
+                                    Cancel
+                                </button>
+                            )}
+                            <button
+                                onClick={handleRunAuto}
+                                disabled={!autoKeyword || isAutoRunning}
+                                className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-6 py-2 rounded-lg font-bold transition flex items-center gap-2"
+                            >
+                                {isAutoRunning ? (
+                                    <>
+                                        <Loader2 size={18} className="animate-spin" /> Processing...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Sparkles size={18} /> Start Auto Process
+                                    </>
+                                )}
                             </button>
                         </div>
                     </div>

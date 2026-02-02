@@ -31,6 +31,11 @@ export class MockJob {
     this.progress = progress;
   }
 
+  async updateData(data: any) {
+    this.data = data;
+    jobs[this.id].data = data;
+  }
+
   async log(row: string) {
     console.log(`[Job:${this.id}] ${row}`);
   }
@@ -49,16 +54,16 @@ export class MockJob {
     // Remove from queue
     const queue = queues[this.name];
     if (queue) {
-        queue.jobs = queue.jobs.filter(j => j.id !== this.id);
+      queue.jobs = queue.jobs.filter(j => j.id !== this.id);
     }
   }
 
   async discard() {
-      return this.remove();
+    return this.remove();
   }
 
   async moveToFailed(err: Error, _token?: string) {
-      this._setFailed(err);
+    this._setFailed(err);
   }
 
   // Internal methods to state change
@@ -94,10 +99,10 @@ export class MockQueue {
     const job = new MockJob(name, data, opts?.jobId);
     this.jobs.push(job);
     console.log(`[MockQueue:${this.name}] Added job ${job.id}`);
-    
+
     // Trigger workers
     this._processNext();
-    
+
     return job;
   }
 
@@ -107,7 +112,7 @@ export class MockQueue {
 
   _processNext() {
     if (this.workers.length === 0) return;
-    
+
     // Find first available worker
     const worker = this.workers.find(w => !w.busy);
     if (!worker) return;
@@ -128,7 +133,7 @@ export class MockWorker extends EventEmitter {
     super();
     this.name = name;
     this.processor = processor;
-    
+
     // Register with queue
     let queue = queues[name];
     if (!queue) {
@@ -140,11 +145,11 @@ export class MockWorker extends EventEmitter {
 
   async _process(job: MockJob) {
     if (this.busy) return; // Should not happen if queue logic is correct
-    
+
     this.busy = true;
     console.log(`[MockWorker:${this.name}] Processing job ${job.id}`);
     job._setActive();
-    
+
     try {
       const result = await this.processor(job);
       job._setCompleted(result);
@@ -155,12 +160,12 @@ export class MockWorker extends EventEmitter {
       job._setFailed(err);
       this.emit('failed', job, err);
     } finally {
-        this.busy = false;
-        // Trigger next job in queue
-        const queue = queues[this.name];
-        if (queue) {
-            queue._processNext();
-        }
+      this.busy = false;
+      // Trigger next job in queue
+      const queue = queues[this.name];
+      if (queue) {
+        queue._processNext();
+      }
     }
   }
 }

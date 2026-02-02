@@ -6,10 +6,10 @@ import path from 'path';
 import fs from 'fs-extra';
 
 export default async function projectRoutes(fastify: FastifyInstance) {
-  
+
   // GET /projects
   fastify.get('/projects', async (_request, _reply) => {
-    return getProjects();
+    return { projects: getProjects() };
   });
 
   // GET /projects/:id
@@ -17,11 +17,11 @@ export default async function projectRoutes(fastify: FastifyInstance) {
     const { id } = request.params as { id: string };
     const project = getProject(id);
     if (!project) return reply.code(404).send({ error: 'Project not found' });
-    
+
     // Enrich with videos
     const videos = getVideos().filter((v: any) => v.project_id === id);
     const videoIds = new Set(videos.map((v: any) => v.id));
-    
+
     // Enrich with clips
     const allClips = getDB().clips || [];
     const clips = allClips.filter((c: any) => videoIds.has(c.video_id));
@@ -40,13 +40,13 @@ export default async function projectRoutes(fastify: FastifyInstance) {
     await fs.ensureDir(projectDir);
 
     const project = {
-        id,
-        name,
-        description,
-        path: projectDir,
-        created_at: new Date().toISOString()
+      id,
+      name,
+      description,
+      path: projectDir,
+      created_at: new Date().toISOString()
     };
-    
+
     saveProject(project);
     return project;
   });
@@ -59,7 +59,7 @@ export default async function projectRoutes(fastify: FastifyInstance) {
 
     // Optional: Remove folder
     if (project.path && await fs.pathExists(project.path)) {
-        // await fs.remove(project.path); // Use with caution
+      // await fs.remove(project.path); // Use with caution
     }
 
     deleteProject(id);
@@ -70,16 +70,16 @@ export default async function projectRoutes(fastify: FastifyInstance) {
   fastify.post('/projects/:id/videos/add', async (request, reply) => {
     const { id } = request.params as { id: string };
     const { videoId } = request.body as { videoId: string };
-    
+
     const project = getProject(id);
     if (!project) return reply.code(404).send({ error: 'Project not found' });
-    
+
     const video = getVideo(videoId) as any;
     if (!video) return reply.code(404).send({ error: 'Video not found' });
-    
+
     // Update video with project_id
     saveVideo({ ...video, project_id: id });
-    
+
     return { success: true };
   });
 }

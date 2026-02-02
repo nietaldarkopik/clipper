@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import path from 'path';
-import { downloadQueue, analyzeQueue, processQueue, uploadQueue } from '../queues';
+import { downloadQueue, analyzeQueue, processQueue, uploadQueue, autoQueue } from '../queues';
 import { v4 as uuidv4 } from 'uuid';
 import { cancelDownloadJob } from '../workers';
 import { getSettings, getVideo, saveVideo, saveClip, deleteClip, getClip } from '../lib/db';
@@ -292,6 +292,7 @@ export default async function videoRoutes(fastify: FastifyInstance) {
         else if (queueName === 'analyze') queue = analyzeQueue;
         else if (queueName === 'process') queue = processQueue;
         else if (queueName === 'upload') queue = uploadQueue;
+        else if (queueName === 'auto') queue = autoQueue;
         else return reply.code(400).send({ error: 'Invalid queue name' });
 
         const job = await queue.getJob(jobId);
@@ -303,7 +304,8 @@ export default async function videoRoutes(fastify: FastifyInstance) {
         const result = job.returnvalue;
         const progress = job.progress;
         const data = job.data;
+        const error = (job as any).failedReason;
 
-        return { id: jobId, state, progress, result, data };
+        return { id: jobId, state, progress, result, data, error };
     });
 }

@@ -4,3 +4,4 @@ export const downloadQueue = createQueue('download');
 export const processQueue = createQueue('process');
 export const analyzeQueue = createQueue('analyze');
 export const uploadQueue = createQueue('upload');
+export const autoQueue = createQueue('auto');

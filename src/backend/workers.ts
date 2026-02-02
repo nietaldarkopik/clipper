@@ -2,12 +2,13 @@ import { Job } from 'bullmq';
 import { createWorker } from './lib/queue-factory';
 import path from 'path';
 import fs from 'fs-extra';
-import { exec as ytDlpExec } from 'yt-dlp-exec';
+import ytDlp from 'yt-dlp-exec';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
 import crypto from 'crypto';
 import { getAIService } from './lib/ai-service';
-import { saveVideo, saveTranscript, saveClip, saveJob, getVideo } from './lib/db';
+import { saveVideo, saveTranscript, saveClip, saveJob, getVideo, getTranscripts, getSettings, saveUploadHistory } from './lib/db';
+import { scrapeSearch } from './lib/web-scraper';
 
 // Check if ffmpegPath is valid
 if (ffmpegPath) {
@@ -28,6 +29,41 @@ fs.ensureDirSync(transcriptsDir);
 // Map to track active download processes
 const activeDownloads = new Map<string, any>();
 
+/**
+ * Helper to burn captions (text overlay) onto a video clip
+ */
+const burnCaptions = async (inputPath: string, outputPath: string, text: string) => {
+  // We'll use a simple background box and centered text
+  // text may need escaping for ffmpeg
+  const escapedText = text.replace(/'/g, "'\\\\''").replace(/:/g, '\\:');
+
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .videoFilters([
+        {
+          filter: 'drawtext',
+          options: {
+            text: escapedText,
+            fontcolor: 'white',
+            fontsize: 32,
+            box: 1,
+            boxcolor: 'black@0.5',
+            boxborderw: 5,
+            x: '(w-text_w)/2',
+            y: '(h-text_h)/2 + 100', // Positioned slightly below center
+            shadowcolor: 'black',
+            shadowx: 2,
+            shadowy: 2
+          }
+        }
+      ])
+      .on('start', (cmd) => console.log('[FFmpeg Burn] CMD:', cmd))
+      .on('end', () => resolve(undefined))
+      .on('error', (err) => reject(err))
+      .save(outputPath);
+  });
+};
+
 export const cancelDownloadJob = (jobId: string) => {
   const subprocess = activeDownloads.get(jobId);
   if (subprocess) {
@@ -41,10 +77,13 @@ export const cancelDownloadJob = (jobId: string) => {
 
 export const startWorkers = () => {
   const downloadWorker = createWorker('download', async (job: Job) => {
-    const { url, id, downloadSubtitles } = job.data;
+    const { url, id, downloadSubtitles, projectId } = job.data; // Added projectId to job.data destructuring
     console.log(`[Download] Starting ${url} (Subtitles: ${downloadSubtitles})`);
 
     try {
+      // Initial save for UI feedback
+      saveVideo({ id, url, title: `Downloading ${id}`, status: 'downloading', progress: 0, project_id: projectId, source: 'youtube' });
+
       const outputTemplate = path.join(downloadsDir, `${id}.%(ext)s`);
 
       const ytDlpOptions: any = {
@@ -64,7 +103,7 @@ export const startWorkers = () => {
 
       // Use exec to get progress events
       await new Promise<void>((resolve, reject) => {
-        const subprocess = ytDlpExec(url, ytDlpOptions);
+        const subprocess = (ytDlp as any).exec(url, ytDlpOptions);
 
         // Track process
         activeDownloads.set(id, subprocess);
@@ -413,7 +452,7 @@ export const startWorkers = () => {
             preferFreeFormats: true,
           };
 
-          await ytDlpExec(video.url, ytDlpOptions);
+          await ytDlp(video.url, ytDlpOptions);
 
           // Find the subtitle file
           const files = fs.readdirSync(downloadsDir);
@@ -551,4 +590,166 @@ export const startWorkers = () => {
   });
 
   console.log('Workers initialized: Download, Process, Analyze, Upload');
+
+  const autoWorker = createWorker('auto', async (job: Job) => {
+    const { keyword, count, platform = 'youtube', projectId } = job.data;
+    const logs: string[] = [];
+
+    const addLog = async (msg: string) => {
+      const timestamp = new Date().toLocaleTimeString();
+      const logEntry = `[${timestamp}] ${msg}`;
+      console.log(`[AutoJob ${job.id}] ${logEntry}`);
+      logs.push(logEntry);
+      if (logs.length > 100) logs.shift();
+      await job.updateData({ ...job.data, logs: logs.join('\n') });
+    };
+
+    await addLog(`Starting auto-process (keyword: "${keyword}", count: ${count})`);
+    job.updateProgress(5);
+
+    try {
+      // 1. SEARCH
+      await addLog(`Searching for viral content on ${platform}...`);
+      let results: any[] = [];
+      if (platform === 'youtube') {
+        const searchParam = `ytsearch${count}:${keyword}`;
+        try {
+          const output = await ytDlp(searchParam, {
+            dumpSingleJson: true,
+            noWarnings: true,
+            flatPlaylist: true,
+            noCheckCertificate: true,
+            ffmpegLocation: ffmpegPath || undefined
+          });
+          results = (output as any).entries || [];
+        } catch (searchErr: any) {
+          await addLog(`YouTube search error: ${searchErr.message}`);
+          throw searchErr;
+        }
+      } else {
+        results = await scrapeSearch(keyword, platform, count);
+      }
+
+      const totalVideos = results.length;
+      if (totalVideos === 0) throw new Error(`No viral videos found for "${keyword}"`);
+
+      await addLog(`Found ${totalVideos} videos. Starting loop.`);
+      const aiService = getAIService();
+      const processedClips = [];
+
+      for (let i = 0; i < totalVideos; i++) {
+        const vid = results[i];
+        const videoUrl = vid.url || (platform === 'youtube' ? `https://www.youtube.com/watch?v=${vid.id}` : vid.url);
+        const downloadId = crypto.randomUUID();
+
+        try {
+          await addLog(`[Video ${i + 1}/${totalVideos}] Processing: ${vid.title || vid.id}`);
+
+          saveVideo({
+            id: downloadId, url: videoUrl, title: vid.title || 'Auto Video',
+            status: 'downloading', project_id: projectId, source: platform
+          });
+
+          const outputTemplate = path.join(downloadsDir, `${downloadId}.%(ext)s`);
+          await ytDlp(videoUrl, {
+            output: outputTemplate, format: 'mp4', noCheckCertificate: true,
+            writeAutoSub: true, subFormat: 'json3', subLangs: 'id.*,en.*', ffmpegLocation: ffmpegPath || undefined
+          } as any);
+
+          const videoPath = path.join(downloadsDir, `${downloadId}.mp4`);
+          saveVideo({ id: downloadId, status: 'completed', filepath: videoPath, progress: 100 });
+
+          // Extraction
+          await addLog(`[Video ${i + 1}] Extracting transcript...`);
+          let transcriptText = "";
+          let transcriptData: any = null;
+          let transcriptType = 'auto';
+
+          const files = fs.readdirSync(downloadsDir);
+          const subFile = files.find(f => f.startsWith(downloadId) && (f.endsWith('.json3') || f.endsWith('.vtt')));
+
+          if (subFile) {
+            const subPath = path.join(downloadsDir, subFile);
+            if (subFile.endsWith('.json3')) {
+              const jsonContent = fs.readJsonSync(subPath);
+              transcriptData = jsonContent;
+              transcriptText = jsonContent.events?.filter((e: any) => e.segs).map((e: any) => e.segs.map((s: any) => s.utf8).join('')).join(' ') || "";
+              transcriptType = 'youtube';
+              await addLog(`[Video ${i + 1}] Parsed YouTube JSON3 subtitles.`);
+            } else {
+              transcriptText = fs.readFileSync(subPath, 'utf-8').replace(/<[^>]*>/g, '').replace(/WEBVTT[\s\S]*?\n\n/, '');
+              transcriptData = { text: transcriptText };
+            }
+          }
+
+          if (!transcriptText || transcriptText.trim().length < 10) {
+            await addLog(`[Video ${i + 1}] Falling back to AI Transcription...`);
+            const audioPath = path.join(downloadsDir, `${downloadId}.wav`);
+            await new Promise((resolve, reject) => {
+              ffmpeg(videoPath).toFormat('wav').on('end', () => resolve(undefined)).on('error', (err) => reject(err)).save(audioPath);
+            });
+            transcriptData = await aiService.transcribeAudio(audioPath, 'tiny');
+            transcriptText = transcriptData.text;
+            transcriptType = 'whisper';
+          }
+
+          if (!transcriptText || transcriptText.trim().length < 10) throw new Error("Transcript empty");
+
+          const tId = crypto.randomUUID();
+          saveTranscript({
+            id: tId, video_id: downloadId, type: transcriptType,
+            content: transcriptData, created_at: new Date().toISOString()
+          });
+          await addLog(`[Video ${i + 1}] Transcript saved (Type: ${transcriptType}, ID: ${tId}, VideoID: ${downloadId})`);
+
+          const highlights = await aiService.getHighlightsFromTranscript(transcriptText);
+          if (highlights && highlights.length > 0) {
+            const hl = highlights[0];
+            await addLog(`[Video ${i + 1}] Clipping highlight: ${hl.title}`);
+            const clipId = crypto.randomUUID();
+            const rawClipPath = path.join(processedDir, `${clipId}_raw.mp4`);
+            const finalClipPath = path.join(processedDir, `${clipId}.mp4`);
+
+            await new Promise((resolve, reject) => {
+              ffmpeg(videoPath).setStartTime(hl.start_time).setDuration(Math.max(5, hl.end_time - hl.start_time))
+                .output(rawClipPath).on('end', () => resolve(undefined)).on('error', (err) => reject(err)).run();
+            });
+
+            try {
+              await burnCaptions(rawClipPath, finalClipPath, hl.title);
+              if (fs.existsSync(rawClipPath)) fs.unlinkSync(rawClipPath);
+            } catch {
+              if (fs.existsSync(rawClipPath)) fs.renameSync(rawClipPath, finalClipPath);
+            }
+
+            const metadata = await aiService.generateMetadata(`${hl.title}\n${hl.description}`);
+            saveClip({
+              id: clipId, video_id: downloadId, start_time: hl.start_time, end_time: hl.end_time,
+              filepath: finalClipPath, label: metadata.titles[0] || hl.title, description: metadata.description
+            });
+
+            saveUploadHistory({
+              id: crypto.randomUUID(), clip_id: clipId, platform: 'youtube',
+              status: 'completed', url: `https://youtube.com/shorts/auto_${clipId}`, metadata, created_at: new Date().toISOString()
+            });
+
+            processedClips.push({ clipId, title: metadata.titles[0] });
+          }
+        } catch (videoErr: any) {
+          await addLog(`[Video ${i + 1}] Error: ${videoErr.message}`);
+        }
+        job.updateProgress(10 + Math.round(((i + 1) / totalVideos) * 80));
+      }
+
+      await addLog(`Done! Processed ${processedClips.length} clips.`);
+      return { status: 'completed', clips: processedClips };
+    } catch (error: any) {
+      await addLog(`Fatal Error: ${error.message}`);
+      throw error;
+    }
+  });
+
+  autoWorker.on('failed', (job, err) => {
+    console.error(`[Auto] Job ${job?.id} failed with ${err.message}`);
+  });
 };

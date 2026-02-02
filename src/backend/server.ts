@@ -13,6 +13,7 @@ import aiRoutes from './routes/ai';
 import channelsRoutes from './routes/channels';
 import projectRoutes from './routes/projects';
 import settingsRoutes from './routes/settings';
+import autoRoutes from './routes/auto';
 
 const fastify = Fastify({ logger: true });
 
@@ -39,6 +40,7 @@ fastify.register(aiRoutes, { prefix: '/api' });
 fastify.register(channelsRoutes, { prefix: '/api' });
 fastify.register(projectRoutes, { prefix: '/api' });
 fastify.register(settingsRoutes, { prefix: '/api' });
+fastify.register(autoRoutes, { prefix: '/api/auto' });
 
 // Serve Static Files (Frontend)
 fastify.register(fastifyStatic, {

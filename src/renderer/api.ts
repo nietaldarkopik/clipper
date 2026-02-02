@@ -44,7 +44,7 @@ export const clipVideo = async (id: string, startTime: number, duration: number,
   return response.data;
 };
 
-export const getJobStatus = async (queueName: 'download' | 'analyze' | 'process' | 'upload', jobId: string) => {
+export const getJobStatus = async (queueName: 'download' | 'analyze' | 'process' | 'upload' | 'auto', jobId: string) => {
   const response = await api.get(`/dashboard/status/${queueName}/${jobId}`);
   return response.data;
 };
@@ -209,6 +209,12 @@ export const deleteClip = async (id: string) => {
 
 export const unprocessClip = async (id: string) => {
   const response = await api.post(`/editor/clips/${id}/unprocess`);
+  return response.data;
+};
+
+// Auto
+export const runAutoProcess = async (params: { keyword?: string, count?: number, platform?: string, projectId?: string }) => {
+  const response = await api.post('/auto/run', params);
   return response.data;
 };
 
