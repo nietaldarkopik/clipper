@@ -122,16 +122,29 @@ export const SettingsTab = () => {
                                     />
                                 </div>
                             ) : (
-                                <div className="space-y-2">
-                                    <label className="text-xs font-bold text-slate-500 uppercase">Ollama URL</label>
-                                    <input 
-                                        type="text"
-                                        placeholder="http://localhost:11434"
-                                        value={settings.ollamaUrl}
-                                        onChange={(e) => setSettings({...settings, ollamaUrl: e.target.value})}
-                                        className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 text-sm text-slate-200 focus:border-indigo-500 outline-none"
-                                    />
-                                    <p className="text-[10px] text-slate-500">Contoh: http://prof.unwim.ac.id/ai/chat</p>
+                                <div className="space-y-4">
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-500 uppercase">Ollama URL</label>
+                                        <input 
+                                            type="text"
+                                            placeholder="http://localhost:11434"
+                                            value={settings.ollamaUrl}
+                                            onChange={(e) => setSettings({...settings, ollamaUrl: e.target.value})}
+                                            className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 text-sm text-slate-200 focus:border-indigo-500 outline-none"
+                                        />
+                                        <p className="text-[10px] text-slate-500">Contoh: http://prof.unwim.ac.id/ai/chat</p>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-500 uppercase">Model Name</label>
+                                        <input 
+                                            type="text"
+                                            placeholder="llama3"
+                                            value={settings.ollamaModel || 'llama3'}
+                                            onChange={(e) => setSettings({...settings, ollamaModel: e.target.value})}
+                                            className="w-full bg-black/40 border border-white/10 rounded-xl py-3 px-4 text-sm text-slate-200 focus:border-indigo-500 outline-none"
+                                        />
+                                        <p className="text-[10px] text-slate-500">Nama model di Ollama server (contoh: llama3, mistral, gemma)</p>
+                                    </div>
                                 </div>
                             )}
                         </div>

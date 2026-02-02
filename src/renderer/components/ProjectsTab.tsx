@@ -14,7 +14,11 @@ interface Project {
     videos?: any[];
 }
 
-export const ProjectsTab = () => {
+interface ProjectsTabProps {
+    onOpenEditor: (clips: any[]) => void;
+}
+
+export const ProjectsTab = ({ onOpenEditor }: ProjectsTabProps) => {
     const [projects, setProjects] = useState<Project[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [showCreateModal, setShowCreateModal] = useState(false);
@@ -66,7 +70,7 @@ export const ProjectsTab = () => {
         return <ProjectDetail project={selectedProject} onBack={() => {
             setSelectedProject(null);
             fetchProjects(); // Refresh list on back
-        }} />;
+        }} onOpenEditor={onOpenEditor} />;
     }
 
     return (
@@ -76,7 +80,7 @@ export const ProjectsTab = () => {
                     <h2 className="text-2xl font-bold text-slate-100">Projects</h2>
                     <p className="text-slate-400">Manage your film recap projects</p>
                 </div>
-                <button 
+                <button
                     onClick={() => setShowCreateModal(true)}
                     className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition"
                 >
@@ -94,7 +98,7 @@ export const ProjectsTab = () => {
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {projects.map(project => (
-                        <div 
+                        <div
                             key={project.id}
                             onClick={() => setSelectedProject(project)}
                             className="bg-slate-800 border border-slate-700 rounded-xl p-5 hover:border-indigo-500/50 hover:shadow-lg hover:shadow-indigo-500/10 transition cursor-pointer group"
@@ -103,17 +107,17 @@ export const ProjectsTab = () => {
                                 <div className="p-3 bg-indigo-500/10 rounded-lg text-indigo-400">
                                     <Folder size={24} />
                                 </div>
-                                <button 
+                                <button
                                     onClick={(e) => handleDeleteProject(project.id, e)}
                                     className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition opacity-0 group-hover:opacity-100"
                                 >
                                     <Trash2 size={16} />
                                 </button>
                             </div>
-                            
+
                             <h3 className="text-lg font-semibold text-slate-100 mb-2">{project.name}</h3>
                             <p className="text-slate-400 text-sm mb-4 line-clamp-2">{project.description || 'No description'}</p>
-                            
+
                             <div className="flex items-center justify-between text-xs text-slate-500 border-t border-slate-700 pt-4">
                                 <div className="flex items-center gap-4">
                                     <span className="flex items-center gap-1">
@@ -137,12 +141,12 @@ export const ProjectsTab = () => {
                 <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
                     <div className="bg-slate-800 rounded-xl p-6 w-full max-w-md border border-slate-700 shadow-2xl">
                         <h3 className="text-xl font-bold text-white mb-4">Create New Project</h3>
-                        
+
                         <div className="space-y-4">
                             <div>
                                 <label className="block text-sm font-medium text-slate-400 mb-1">Project Name</label>
-                                <input 
-                                    type="text" 
+                                <input
+                                    type="text"
                                     value={newProjectName}
                                     onChange={(e) => setNewProjectName(e.target.value)}
                                     className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-indigo-500"
@@ -152,7 +156,7 @@ export const ProjectsTab = () => {
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-slate-400 mb-1">Description</label>
-                                <textarea 
+                                <textarea
                                     value={newProjectDesc}
                                     onChange={(e) => setNewProjectDesc(e.target.value)}
                                     className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-indigo-500 h-24 resize-none"
@@ -162,13 +166,13 @@ export const ProjectsTab = () => {
                         </div>
 
                         <div className="flex justify-end gap-3 mt-6">
-                            <button 
+                            <button
                                 onClick={() => setShowCreateModal(false)}
                                 className="px-4 py-2 text-slate-400 hover:text-white transition"
                             >
                                 Cancel
                             </button>
-                            <button 
+                            <button
                                 onClick={handleCreateProject}
                                 disabled={!newProjectName}
                                 className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition"

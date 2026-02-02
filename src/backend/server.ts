@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
+import multipart from '@fastify/multipart';
 import path from 'path';
 import fastifyStatic from '@fastify/static';
 import { startWorkers } from './workers';
@@ -23,6 +24,12 @@ fastify.register(cors, {
   origin: true
 });
 
+fastify.register(multipart, {
+  limits: {
+    fileSize: 500 * 1024 * 1024, // 500MB
+  }
+});
+
 // Register Routes
 // Force reload
 fastify.register(videoRoutes, { prefix: '/api' });
@@ -38,7 +45,23 @@ fastify.register(fastifyStatic, {
   root: path.join(__dirname, '../../dist/renderer'),
   prefix: '/',
   // Don't throw 404 immediately, let setNotFoundHandler handle it for SPA
-  wildcard: false 
+  wildcard: false
+});
+
+// Serve Downloads/Uploads Directory
+fastify.register(fastifyStatic, {
+  root: path.join(__dirname, '../../downloads'),
+  prefix: '/downloads/',
+  decorateReply: false,
+  wildcard: true // explicit true to serve files
+});
+
+// Serve Processed Directory
+fastify.register(fastifyStatic, {
+  root: path.join(__dirname, '../../processed'),
+  prefix: '/processed/',
+  decorateReply: false, // Avoid conflict with previous register
+  wildcard: true // explicit true to serve files
 });
 
 fastify.get('/api/health', async (_request, _reply) => {
@@ -47,12 +70,12 @@ fastify.get('/api/health', async (_request, _reply) => {
 
 // SPA Catch-all
 fastify.setNotFoundHandler(async (request, reply) => {
-    // If it's an API call (JSON) or explicit API route, return 404
-    // Otherwise try to serve index.html for client-side routing
-    if (request.headers.accept?.includes('text/html') && !request.url.startsWith('/api')) {
-         return reply.sendFile('index.html');
-    }
-    reply.status(404).send({ error: 'Not Found', message: `Route ${request.url} not found` });
+  // If it's an API call (JSON) or explicit API route, return 404
+  // Otherwise try to serve index.html for client-side routing
+  if (request.headers.accept?.includes('text/html') && !request.url.startsWith('/api')) {
+    return reply.sendFile('index.html');
+  }
+  reply.status(404).send({ error: 'Not Found', message: `Route ${request.url} not found` });
 });
 
 export const startServer = async () => {
