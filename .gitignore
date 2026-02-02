@@ -211,4 +211,6 @@ transcripts/
 processed/
 dist
 .env
+data/
 data/db.json
+db.json
