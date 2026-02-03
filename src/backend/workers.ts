@@ -652,8 +652,15 @@ export const startWorkers = () => {
 
           const outputTemplate = path.join(downloadsDir, `${downloadId}.%(ext)s`);
           await ytDlp(videoUrl, {
-            output: outputTemplate, format: 'mp4', noCheckCertificate: true,
-            writeAutoSub: true, subFormat: 'json3', subLangs: 'id.*,en.*', ffmpegLocation: ffmpegPath || undefined
+            output: outputTemplate,
+            format: 'mp4',
+            noCheckCertificate: true,
+            writeAutoSub: true,
+            subFormat: 'json3',
+            //subLangs: 'id.*,en.*',
+            subLangs: 'id.*',
+            jsRuntimes: 'node',   // 👈 TAMBAHKAN INI
+            ffmpegLocation: ffmpegPath || undefined
           } as any);
 
           const videoPath = path.join(downloadsDir, `${downloadId}.mp4`);
