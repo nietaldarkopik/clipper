@@ -44,7 +44,12 @@ export const clipVideo = async (id: string, startTime: number, duration: number,
   return response.data;
 };
 
-export const getJobStatus = async (queueName: 'download' | 'analyze' | 'process' | 'upload' | 'auto', jobId: string) => {
+export const renderProject = async (projectData: any) => {
+  const response = await api.post('/editor/render', projectData);
+  return response.data;
+};
+
+export const getJobStatus = async (queueName: 'download' | 'analyze' | 'process' | 'upload' | 'auto' | 'render', jobId: string) => {
   const response = await api.get(`/dashboard/status/${queueName}/${jobId}`);
   return response.data;
 };

@@ -42,6 +42,7 @@ import {
 } from '../api';
 import { VideoDetailsModal } from '../VideoDetailsModal';
 import { VideoCutterModal } from './VideoCutterModal';
+import { AdvancedVideoEditor } from './AdvancedVideoEditor';
 
 interface Project {
     id: string;
@@ -69,7 +70,7 @@ export const ProjectDetail = ({ project: initialProject, onBack, onOpenEditor }:
     const [videos, setVideos] = useState<any[]>([]);
     const [clips, setClips] = useState<any[]>([]);
 
-    const [activeTab, setActiveTab] = useState<'videos' | 'highlights' | 'script'>('videos');
+    const [activeTab, setActiveTab] = useState<'videos' | 'highlights' | 'script' | 'editor'>('videos');
     const [processingVideos, setProcessingVideos] = useState<Set<string>>(new Set());
     const [processingClips, setProcessingClips] = useState<Set<string>>(new Set());
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -83,7 +84,7 @@ export const ProjectDetail = ({ project: initialProject, onBack, onOpenEditor }:
 
     // Highlights State
     const [selectedClips, setSelectedClips] = useState<Set<string>>(new Set());
-    const [activeJob, setActiveJob] = useState<{ id: string, videoId: string, type: 'analyze' | 'process' } | null>(null);
+    const [activeJob, setActiveJob] = useState<{ id: string, videoId: string, type: 'analyze' | 'process' | 'render' } | null>(null);
     const [jobProgress, setJobProgress] = useState<number>(0);
     const [partialTranscript, setPartialTranscript] = useState<string>('');
 
@@ -127,11 +128,16 @@ export const ProjectDetail = ({ project: initialProject, onBack, onOpenEditor }:
                             newSet.delete(activeJob.videoId); // videoId here is clipId for process jobs
                             return newSet;
                         });
+                    } else if (queueName === 'render') {
+                        // Handle render completion
+                        if (status.state === 'completed') {
+                            alert('Render completed successfully!');
+                        }
                     }
                     if (status.state === 'completed') {
                         refreshData();
                     } else {
-                        alert(`${queueName === 'analyze' ? 'Analysis' : 'Processing'} failed.`);
+                        alert(`${queueName === 'analyze' ? 'Analysis' : (queueName === 'render' ? 'Render' : 'Processing')} failed.`);
                     }
                 }
             } catch (e) {
@@ -635,7 +641,26 @@ export const ProjectDetail = ({ project: initialProject, onBack, onOpenEditor }:
                     >
                         Generated Script
                     </button>
+                    <button
+                        onClick={() => setActiveTab('editor')}
+                        className={`pb-3 text-sm font-medium transition ${activeTab === 'editor' ? 'text-indigo-400 border-b-2 border-indigo-400' : 'text-slate-400 hover:text-slate-200'}`}
+                    >
+                        Advanced Editor
+                    </button>
                 </div>
+
+                {activeTab === 'editor' && (
+                    <div className="h-[calc(100vh-140px)] -mx-6 -my-6">
+                        <AdvancedVideoEditor 
+                            project={project} 
+                            videos={videos} 
+                            highlights={clips}
+                            onClose={() => setActiveTab('videos')}
+                            onAnalyze={handleAnalyze}
+                            processingVideos={processingVideos}
+                        />
+                    </div>
+                )}
 
                 {activeTab === 'videos' && (
                     <div className="space-y-4">

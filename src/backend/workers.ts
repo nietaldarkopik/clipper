@@ -9,6 +9,7 @@ import crypto from 'crypto';
 import { getAIService } from './lib/ai-service';
 import { saveVideo, saveTranscript, saveClip, saveJob, getVideo, getTranscripts, getSettings, saveUploadHistory } from './lib/db';
 import { scrapeSearch } from './lib/web-scraper';
+import { renderProjectVideo } from './lib/render-engine';
 
 // Check if ffmpegPath is valid
 if (ffmpegPath) {
@@ -758,5 +759,65 @@ export const startWorkers = () => {
 
   autoWorker.on('failed', (job, err) => {
     console.error(`[Auto] Job ${job?.id} failed with ${err.message}`);
+  });
+
+  const renderWorker = createWorker('render', async (job: Job) => {
+      const { id, layers, clips, duration, resolution, format, projectId } = job.data;
+      console.log(`[Render] Starting render for project ${projectId || 'unknown'} (Job: ${id})`);
+      
+      try {
+        job.updateProgress(10);
+        
+        const width = resolution === '4k' ? 3840 : (resolution === '720p' ? 1280 : 1920);
+        const height = resolution === '4k' ? 2160 : (resolution === '720p' ? 720 : 1080);
+        const fps = 30;
+        
+        const outputFilename = `render_${projectId || 'project'}_${id}.${format || 'mp4'}`;
+        const outputPath = path.join(processedDir, outputFilename);
+        
+        await renderProjectVideo(
+            layers,
+            clips,
+            duration,
+            {
+                width,
+                height,
+                fps,
+                outputPath
+            }
+        );
+        
+        job.updateProgress(100);
+        console.log(`[Render] Completed: ${outputPath}`);
+        
+        // Save result as a new video in project (optional)
+        if (projectId) {
+            try {
+                saveVideo({
+                    id: crypto.randomUUID(),
+                    project_id: projectId,
+                    url: outputPath,
+                    filepath: outputPath,
+                    source: 'render',
+                    title: `Rendered Project (${resolution})`,
+                    created_at: new Date().toISOString(),
+                    status: 'completed',
+                    progress: 100,
+                    duration: duration
+                });
+            } catch (e) {
+                console.warn('Failed to save rendered video to DB', e);
+            }
+        }
+        
+        return { status: 'completed', filePath: outputPath };
+      } catch (error: any) {
+        console.error(`[Render] Failed ${id}`, error);
+        throw error;
+      }
+  });
+  
+  renderWorker.on('failed', (job, err) => {
+      console.error(`[Render] Job ${job?.id} failed with ${err.message}`);
   });
 };

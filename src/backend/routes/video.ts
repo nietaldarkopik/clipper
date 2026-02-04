@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import path from 'path';
-import { downloadQueue, analyzeQueue, processQueue, uploadQueue, autoQueue } from '../queues';
+import { downloadQueue, analyzeQueue, processQueue, uploadQueue, autoQueue, renderQueue } from '../queues';
 import { v4 as uuidv4 } from 'uuid';
 import { cancelDownloadJob } from '../workers';
 import { getSettings, getVideo, saveVideo, saveClip, deleteClip, getClip } from '../lib/db';
@@ -293,6 +293,7 @@ export default async function videoRoutes(fastify: FastifyInstance) {
         else if (queueName === 'process') queue = processQueue;
         else if (queueName === 'upload') queue = uploadQueue;
         else if (queueName === 'auto') queue = autoQueue;
+        else if (queueName === 'render') queue = renderQueue; // Add render queue
         else return reply.code(400).send({ error: 'Invalid queue name' });
 
         const job = await queue.getJob(jobId);

@@ -14,6 +14,7 @@ import channelsRoutes from './routes/channels';
 import projectRoutes from './routes/projects';
 import settingsRoutes from './routes/settings';
 import autoRoutes from './routes/auto';
+import editorRoutes from './routes/editor';
 
 const fastify = Fastify({ logger: true });
 
@@ -41,6 +42,7 @@ fastify.register(channelsRoutes, { prefix: '/api' });
 fastify.register(projectRoutes, { prefix: '/api' });
 fastify.register(settingsRoutes, { prefix: '/api' });
 fastify.register(autoRoutes, { prefix: '/api/auto' });
+fastify.register(editorRoutes, { prefix: '/api' });
 
 // Serve Static Files (Frontend)
 fastify.register(fastifyStatic, {
