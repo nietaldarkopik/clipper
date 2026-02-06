@@ -109,7 +109,7 @@ async function runBuildProcess() {
     console.log('[WEBHOOK] Build completed successfully.');
     
     // Optional: Restart service if using PM2
-    // await execAsync('pm2 reload all'); 
+    await execAsync('pm2 reload all'); 
     
   } catch (error) {
     console.error('[WEBHOOK] Build failed:', error);
