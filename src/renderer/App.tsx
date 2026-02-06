@@ -649,22 +649,22 @@ const App = () => {
   useEffect(() => {
     if (activeTab !== 'library') return;
 
-    const fetchVideos = () => {
-      setIsVideosLoading(true);
+    const fetchVideos = (isBackground = false) => {
+      if (!isBackground) setIsVideosLoading(true);
       api.get('/library/videos')
         .then(res => res.data)
         .then(data => {
           setVideos(data.videos || []);
-          setIsVideosLoading(false);
+          if (!isBackground) setIsVideosLoading(false);
         })
         .catch(err => {
           console.error(err);
-          setIsVideosLoading(false);
+          if (!isBackground) setIsVideosLoading(false);
         });
     };
 
-    fetchVideos();
-    const interval = setInterval(fetchVideos, 5000);
+    fetchVideos(false);
+    const interval = setInterval(() => fetchVideos(true), 5000);
     return () => clearInterval(interval);
   }, [activeTab]);
 
