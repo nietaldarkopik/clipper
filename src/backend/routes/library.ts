@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { getVideos, getVideo, deleteVideo, getClips, deleteClip, getTranscript, getTranscripts } from '../lib/db';
+import { getVideos, getVideo, deleteVideo, bulkDeleteVideos, getClips, deleteClip, getTranscript, getTranscripts } from '../lib/db';
 
 export default async function libraryRoutes(fastify: FastifyInstance) {
   
@@ -54,6 +54,19 @@ export default async function libraryRoutes(fastify: FastifyInstance) {
       return { success: true };
     } catch (error) {
       return reply.code(500).send({ error: 'Failed to delete video' });
+    }
+  });
+
+  fastify.post('/library/videos/bulk-delete', async (request, reply) => {
+    const { ids } = request.body as { ids: string[] };
+    if (!ids || !Array.isArray(ids)) {
+        return reply.code(400).send({ error: 'ids array is required' });
+    }
+    try {
+      bulkDeleteVideos(ids);
+      return { success: true, count: ids.length };
+    } catch (error) {
+      return reply.code(500).send({ error: 'Failed to bulk delete videos' });
     }
   });
 

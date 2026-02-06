@@ -53,6 +53,7 @@ const formatTime = (seconds: number) => {
 
 interface LibraryTabProps {
   videos: any[];
+  setVideos: (videos: any[]) => void;
   isLoading: boolean;
   setCurrentFilePath: (path: string | null) => void;
   setCurrentVideoId: (id: string | null) => void;
@@ -61,8 +62,43 @@ interface LibraryTabProps {
   setMetadata: (metadata: any) => void;
 }
 
-const LibraryTab = ({ videos, isLoading, setCurrentFilePath, setCurrentVideoId, setActiveTab, setTranscript, setMetadata }: LibraryTabProps) => {
+const LibraryTab = ({ videos, setVideos, isLoading, setCurrentFilePath, setCurrentVideoId, setActiveTab, setTranscript, setMetadata }: LibraryTabProps) => {
   const [selectedVideoDetails, setSelectedVideoDetails] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleSelectAll = () => {
+    if (selectedIds.length === videos.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(videos.map(v => v.id));
+    }
+  };
+
+  const handleSelectVideo = (id: string) => {
+    if (selectedIds.includes(id)) {
+      setSelectedIds(selectedIds.filter(vId => vId !== id));
+    } else {
+      setSelectedIds([...selectedIds, id]);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return;
+    if (!confirm(`Are you sure you want to delete ${selectedIds.length} videos and their related clips/transcripts?`)) return;
+    
+    setIsDeleting(true);
+    try {
+      await api.post('/library/videos/bulk-delete', { ids: selectedIds });
+      setVideos(videos.filter(v => !selectedIds.includes(v.id)));
+      setSelectedIds([]);
+    } catch (err) {
+      alert('Failed to delete selected videos');
+      console.error(err);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this video?')) return;
@@ -76,9 +112,31 @@ const LibraryTab = ({ videos, isLoading, setCurrentFilePath, setCurrentVideoId, 
 
   return (
     <div className="flex-1 flex flex-col overflow-y-auto bg-[#0f0f0f] p-8">
-      <h2 className="text-2xl font-bold text-white flex items-center gap-3 mb-8">
-        <Folder className="text-indigo-500" /> Library
-      </h2>
+      <div className="flex justify-between items-center mb-8">
+        <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+          <Folder className="text-indigo-500" /> Library
+        </h2>
+        <div className="flex gap-3">
+          {videos.length > 0 && (
+            <button 
+              onClick={handleSelectAll}
+              className="px-4 py-2 rounded-lg bg-[#1a1a1a] border border-white/10 hover:bg-[#252525] transition text-sm font-medium text-slate-300"
+            >
+              {selectedIds.length === videos.length ? 'Deselect All' : 'Select All'}
+            </button>
+          )}
+          {selectedIds.length > 0 && (
+            <button
+              onClick={handleBulkDelete}
+              disabled={isDeleting}
+              className="px-4 py-2 rounded-lg bg-red-600/20 text-red-400 border border-red-600/30 hover:bg-red-600 hover:text-white transition text-sm font-bold flex items-center gap-2"
+            >
+              {isDeleting ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+              Delete ({selectedIds.length})
+            </button>
+          )}
+        </div>
+      </div>
 
       {selectedVideoDetails && (
         <VideoDetailsModal
@@ -92,7 +150,15 @@ const LibraryTab = ({ videos, isLoading, setCurrentFilePath, setCurrentVideoId, 
       ) : (
         <div className="grid grid-cols-3 gap-6">
           {videos.map(video => (
-            <div key={video.id} className="bg-[#1a1a1a] rounded-2xl overflow-hidden border border-white/5 hover:border-indigo-500/50 transition group">
+            <div key={video.id} className={`bg-[#1a1a1a] rounded-2xl overflow-hidden border transition group relative ${selectedIds.includes(video.id) ? 'border-indigo-500 ring-1 ring-indigo-500/50' : 'border-white/5 hover:border-indigo-500/50'}`}>
+              <div className="absolute top-2 left-2 z-20" onClick={(e) => e.stopPropagation()}>
+                <input 
+                  type="checkbox" 
+                  checked={selectedIds.includes(video.id)} 
+                  onChange={() => handleSelectVideo(video.id)}
+                  className="w-5 h-5 accent-indigo-600 rounded cursor-pointer shadow-lg"
+                />
+              </div>
               <div className="aspect-video bg-black relative">
                 {video.thumbnail ? (
                   <img src={video.thumbnail} className="w-full h-full object-cover" />
@@ -1368,7 +1434,7 @@ const App = () => {
         {activeTab === 'projects' && <ProjectsTab onOpenEditor={(clips) => handleOpenEditor(clips)} />}
         {activeTab === 'research' && ResearchTab()}
         {activeTab === 'channels' && <ChannelsTab onUseChannel={(url) => { setSearchUrl(url); setActiveTab('research'); }} />}
-        {activeTab === 'library' && <LibraryTab videos={videos} isLoading={isVideosLoading} setCurrentFilePath={setCurrentFilePath} setCurrentVideoId={setCurrentVideoId} setActiveTab={setActiveTab} setTranscript={setTranscript} setMetadata={setMetadata} />}
+        {activeTab === 'library' && <LibraryTab videos={videos} setVideos={setVideos} isLoading={isVideosLoading} setCurrentFilePath={setCurrentFilePath} setCurrentVideoId={setCurrentVideoId} setActiveTab={setActiveTab} setTranscript={setTranscript} setMetadata={setMetadata} />}
         {activeTab === 'editor' && EditorTab()}
         {activeTab === 'captions' && CaptionTab()}
         {activeTab === 'publish' && PublishTab()}

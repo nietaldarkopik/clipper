@@ -83,6 +83,15 @@ export const deleteVideo = (id: string) => {
   return { changes: 1 };
 };
 
+export const bulkDeleteVideos = (ids: string[]) => {
+  const db = readDB();
+  db.videos = db.videos.filter((v: any) => !ids.includes(v.id));
+  db.clips = db.clips.filter((c: any) => !ids.includes(c.video_id));
+  db.transcripts = db.transcripts.filter((t: any) => !ids.includes(t.video_id));
+  writeDB(db);
+  return { changes: ids.length };
+};
+
 // Transcripts
 export const saveTranscript = (transcript: any) => {
   const db = readDB();

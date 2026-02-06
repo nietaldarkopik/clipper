@@ -1,6 +1,8 @@
 import { FastifyInstance } from 'fastify';
 import { exec } from 'child_process';
 import util from 'util';
+import fs from 'fs-extra';
+import path from 'path';
 
 const execAsync = util.promisify(exec);
 
@@ -67,16 +69,39 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
 
 async function runBuildProcess() {
   console.log('[WEBHOOK] Starting build process...');
+  const dbPath = path.join(process.cwd(), 'data', 'db.json');
+  const backupPath = path.join(process.cwd(), 'data', 'db.json.backup');
+
   try {
-    // 1. Git Pull
+    // 1. Backup database
+    if (await fs.pathExists(dbPath)) {
+        console.log('[WEBHOOK] Backing up database...');
+        await fs.copy(dbPath, backupPath, { overwrite: true });
+    }
+
+    // 2. Git Stash (to save local changes if any)
+    console.log('[WEBHOOK] Stashing local changes...');
+    try {
+        await execAsync('git stash');
+    } catch (e) {
+        console.log('[WEBHOOK] Git stash warning (might be empty/ignored):', e);
+    }
+
+    // 3. Git Pull
     console.log('[WEBHOOK] Git pulling...');
     await execAsync('git pull');
     
-    // 2. NPM Install
+    // 4. Restore database
+    if (await fs.pathExists(backupPath)) {
+        console.log('[WEBHOOK] Restoring database...');
+        await fs.copy(backupPath, dbPath, { overwrite: true });
+    }
+    
+    // 5. NPM Install
     console.log('[WEBHOOK] NPM installing...');
     await execAsync('npm install');
     
-    // 3. Build (Backend + Frontend)
+    // 6. Build (Backend + Frontend)
     console.log('[WEBHOOK] Building...');
     // Using build:web as it seems to be the one for server deployment (excludes electron-builder)
     await execAsync('npm run build:web');
