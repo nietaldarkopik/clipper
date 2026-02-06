@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { Folder, Plus, Trash2, Video, FileText, ChevronRight, MoreVertical, Sparkles, Loader2, Play } from 'lucide-react';
+import { Folder, Plus, Trash2, Video, FileText, ChevronRight, MoreVertical, Sparkles, Loader2, Play, Search } from 'lucide-react';
 import { ProjectDetail } from './ProjectDetail';
-import { api, runAutoProcess, getJobStatus } from '../api';
+import { api, runAutoProcess, getJobStatus, searchAutoVideos } from '../api';
 
 interface Project {
     id: string;
@@ -30,9 +30,42 @@ export const ProjectsTab = ({ onOpenEditor }: ProjectsTabProps) => {
     const [autoCount, setAutoCount] = useState(3);
     const [autoPlatform, setAutoPlatform] = useState('youtube');
     const [isAutoRunning, setIsAutoRunning] = useState(false);
+    const [isAutoSearching, setIsAutoSearching] = useState(false);
     const [autoJobId, setAutoJobId] = useState<string | null>(null);
     const [autoProgress, setAutoProgress] = useState(0);
     const [autoLogs, setAutoLogs] = useState<string>('');
+    const [autoResults, setAutoResults] = useState<any[]>([]);
+    const [autoSelected, setAutoSelected] = useState<Set<string>>(new Set());
+
+    const formatDuration = (seconds?: number) => {
+        if (seconds === undefined || seconds === null || Number.isNaN(seconds)) return '--:--';
+        const total = Math.max(0, Math.floor(seconds));
+        const hrs = Math.floor(total / 3600);
+        const mins = Math.floor((total % 3600) / 60);
+        const secs = total % 60;
+        if (hrs > 0) return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    };
+
+    const formatBytes = (bytes?: number) => {
+        if (!bytes || Number.isNaN(bytes)) return '-';
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let size = bytes;
+        let unit = 0;
+        while (size >= 1024 && unit < units.length - 1) {
+            size /= 1024;
+            unit += 1;
+        }
+        return `${size.toFixed(size >= 10 ? 0 : 1)} ${units[unit]}`;
+    };
+
+    const getInitials = (name?: string) => {
+        if (!name) return 'C';
+        const parts = name.trim().split(/\s+/).filter(Boolean);
+        const first = parts[0]?.[0] || '';
+        const second = parts[1]?.[0] || '';
+        return (first + second).toUpperCase() || 'C';
+    };
 
     const fetchProjects = async () => {
         try {
@@ -51,6 +84,14 @@ export const ProjectsTab = ({ onOpenEditor }: ProjectsTabProps) => {
     useEffect(() => {
         fetchProjects();
     }, []);
+
+    useEffect(() => {
+        if (showAutoModal) {
+            setAutoResults([]);
+            setAutoSelected(new Set());
+            setIsAutoSearching(false);
+        }
+    }, [showAutoModal]);
 
     const handleCreateProject = async () => {
         if (!newProjectName) return;
@@ -89,18 +130,39 @@ export const ProjectsTab = ({ onOpenEditor }: ProjectsTabProps) => {
                 description: `Automated processing for ${autoKeyword} at ${new Date().toLocaleString()}`
             });
             const projectId = projectRes.data.id;
+            const selectedVideos = autoResults.filter(v => autoSelected.has(v.id));
 
             const res = await runAutoProcess({
                 keyword: autoKeyword,
-                count: autoCount,
                 platform: autoPlatform,
-                projectId
+                projectId,
+                selectedVideos
             });
             setAutoJobId(res.jobId);
         } catch (error) {
             console.error('Failed to run auto clipper:', error);
             alert('Failed to start auto clipper');
             setIsAutoRunning(false);
+        }
+    };
+
+    const handleSearchAuto = async () => {
+        if (!autoKeyword) return;
+        setIsAutoSearching(true);
+        try {
+            const res = await searchAutoVideos({
+                keyword: autoKeyword,
+                count: autoCount,
+                platform: autoPlatform
+            });
+            const results = res.results || [];
+            setAutoResults(results);
+            setAutoSelected(new Set(results.map((item: any) => item.id)));
+        } catch (error) {
+            console.error('Failed to search auto videos:', error);
+            alert('Gagal mencari video untuk auto clipper');
+        } finally {
+            setIsAutoSearching(false);
         }
     };
 
@@ -273,7 +335,7 @@ export const ProjectsTab = ({ onOpenEditor }: ProjectsTabProps) => {
                         </div>
 
                         <p className="text-slate-400 text-sm mb-6">
-                            Enter a keyword to find viral content. AI will automatically search, download, find highlights, create clips, and generate metadata.
+                            Cari video dulu, pilih video yang mau diproses, lalu jalankan Auto Clipper.
                         </p>
 
                         <div className="space-y-4">
@@ -296,7 +358,7 @@ export const ProjectsTab = ({ onOpenEditor }: ProjectsTabProps) => {
                                         value={autoPlatform}
                                         onChange={(e) => setAutoPlatform(e.target.value)}
                                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-emerald-500"
-                                        disabled={isAutoRunning}
+                                        disabled={isAutoRunning || isAutoSearching}
                                     >
                                         <option value="youtube">YouTube</option>
                                         <option value="tiktok">TikTok (Search)</option>
@@ -312,10 +374,101 @@ export const ProjectsTab = ({ onOpenEditor }: ProjectsTabProps) => {
                                         value={autoCount}
                                         onChange={(e) => setAutoCount(parseInt(e.target.value))}
                                         className="w-full bg-slate-900 border border-slate-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-emerald-500"
-                                        disabled={isAutoRunning}
+                                        disabled={isAutoRunning || isAutoSearching}
                                     />
                                 </div>
                             </div>
+
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={handleSearchAuto}
+                                    disabled={!autoKeyword || isAutoRunning || isAutoSearching}
+                                    className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition flex items-center gap-2"
+                                >
+                                    {isAutoSearching ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                                    Cari Video
+                                </button>
+                                {autoResults.length > 0 && (
+                                    <button
+                                        onClick={() => {
+                                            if (autoSelected.size === autoResults.length) {
+                                                setAutoSelected(new Set());
+                                            } else {
+                                                setAutoSelected(new Set(autoResults.map((item: any) => item.id)));
+                                            }
+                                        }}
+                                        disabled={isAutoRunning || isAutoSearching}
+                                        className="bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition"
+                                    >
+                                        {autoSelected.size === autoResults.length ? 'Batal Pilih Semua' : 'Pilih Semua'}
+                                    </button>
+                                )}
+                            </div>
+
+                            {autoResults.length > 0 && (
+                                <div className="mt-4">
+                                    <label className="block text-xs font-medium text-slate-500 mb-2">Pilih Video</label>
+                                    <div className="bg-black/40 border border-slate-700 rounded-lg p-2 max-h-64 overflow-y-auto">
+                                        <div className="grid grid-cols-1 gap-3">
+                                            {autoResults.map(video => (
+                                                <div
+                                                    key={video.id}
+                                                    className={`rounded-lg border ${autoSelected.has(video.id) ? 'border-emerald-500/60 bg-emerald-500/10' : 'border-slate-700 bg-slate-900/60'} overflow-hidden cursor-pointer transition`}
+                                                    onClick={() => {
+                                                        if (isAutoRunning) return;
+                                                        setAutoSelected(prev => {
+                                                            const next = new Set(prev);
+                                                            if (next.has(video.id)) next.delete(video.id);
+                                                            else next.add(video.id);
+                                                            return next;
+                                                        });
+                                                    }}
+                                                >
+                                                    <div className="relative">
+                                                        {video.thumbnail ? (
+                                                            <img src={video.thumbnail} className="w-full h-32 object-cover" />
+                                                        ) : (
+                                                            <div className="w-full h-32 bg-slate-800 flex items-center justify-center text-[10px] text-slate-500">No Thumbnail</div>
+                                                        )}
+                                                        <div className="absolute top-2 left-2">
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={autoSelected.has(video.id)}
+                                                                onChange={() => {}}
+                                                                onClick={(e) => e.stopPropagation()}
+                                                                disabled={isAutoRunning}
+                                                                className="w-4 h-4 rounded border-slate-600 text-emerald-500 focus:ring-emerald-500 bg-slate-700"
+                                                            />
+                                                        </div>
+                                                        <div className="absolute bottom-2 left-2 bg-black/70 text-white text-[10px] px-2 py-0.5 rounded">
+                                                            {formatDuration(video.duration)}
+                                                        </div>
+                                                        <div className="absolute bottom-2 right-2 bg-black/70 text-white text-[10px] px-2 py-0.5 rounded">
+                                                            {formatBytes(video.fileSize)}
+                                                        </div>
+                                                    </div>
+                                                    <div className="p-3">
+                                                        <div className="text-xs font-semibold text-slate-100 line-clamp-2">{video.title || video.url}</div>
+                                                        <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-400">
+                                                            {video.channelThumbnail ? (
+                                                                <img src={video.channelThumbnail} className="w-5 h-5 rounded-full object-cover border border-slate-700" />
+                                                            ) : (
+                                                                <div className="w-5 h-5 rounded-full bg-slate-700 flex items-center justify-center text-[9px] text-slate-200">
+                                                                    {getInitials(video.channelName || video.uploader)}
+                                                                </div>
+                                                            )}
+                                                            <span className="line-clamp-1">{video.channelName || video.uploader || 'Unknown Channel'}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="mt-2 text-[10px] text-slate-500">
+                                        Terpilih: {autoSelected.size} dari {autoResults.length}
+                                    </div>
+                                </div>
+                            )}
 
                             {isAutoRunning && (
                                 <div className="pt-4">
@@ -356,7 +509,7 @@ export const ProjectsTab = ({ onOpenEditor }: ProjectsTabProps) => {
                             )}
                             <button
                                 onClick={handleRunAuto}
-                                disabled={!autoKeyword || isAutoRunning}
+                                disabled={isAutoRunning || autoSelected.size === 0}
                                 className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-6 py-2 rounded-lg font-bold transition flex items-center gap-2"
                             >
                                 {isAutoRunning ? (

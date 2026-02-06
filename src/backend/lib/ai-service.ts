@@ -667,7 +667,7 @@ export const getAIService = (): AIService => {
         textService = new OllamaService(url, model);
     } else {
         // Default to OpenAI
-        const apiKey = settings.openaiApiKey || process.env.OPENAI_API_KEY;
+        const apiKey = process.env.OPENAI_API_KEY || settings.openaiApiKey;
         if (!apiKey) {
              console.warn("OPENAI_API_KEY is not set in settings or env. AI features may fail.");
              // We can still return the service, but calls will fail. 

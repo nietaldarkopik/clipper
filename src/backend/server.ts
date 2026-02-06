@@ -15,6 +15,7 @@ import projectRoutes from './routes/projects';
 import settingsRoutes from './routes/settings';
 import autoRoutes from './routes/auto';
 import editorRoutes from './routes/editor';
+import webhookRoutes from './routes/webhook';
 
 const fastify = Fastify({ logger: true });
 
@@ -43,6 +44,7 @@ fastify.register(projectRoutes, { prefix: '/api' });
 fastify.register(settingsRoutes, { prefix: '/api' });
 fastify.register(autoRoutes, { prefix: '/api/auto' });
 fastify.register(editorRoutes, { prefix: '/api' });
+fastify.register(webhookRoutes, { prefix: '/api' });
 
 // Serve Static Files (Frontend)
 fastify.register(fastifyStatic, {

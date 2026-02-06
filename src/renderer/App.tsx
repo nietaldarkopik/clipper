@@ -581,7 +581,10 @@ const App = () => {
   const [processingList, setProcessingList] = useState<Array<{ id: string, name: string, progress: number, status: string, queueName: string }>>([]);
 
   useEffect(() => {
+    if (activeTab !== 'library') return;
+
     const fetchVideos = () => {
+      setIsVideosLoading(true);
       api.get('/library/videos')
         .then(res => res.data)
         .then(data => {
@@ -597,7 +600,7 @@ const App = () => {
     fetchVideos();
     const interval = setInterval(fetchVideos, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [activeTab]);
 
   const [showRecorder, setShowRecorder] = useState(false);
 
@@ -606,6 +609,10 @@ const App = () => {
   }, [researchPage, researchLimit, researchSource]);
 
   const loadTrending = async () => {
+    if (researchSource === 'notebooklm' || researchSource === 'chatgpt' || researchSource === 'deepseek') {
+      setTrendingVideos([]);
+      return;
+    }
     // Only load trending if search is empty
     if (searchUrl && !searchUrl.match(/^(http|https|www)/)) return;
 
@@ -625,6 +632,20 @@ const App = () => {
 
     // Check if URL
     const isUrl = searchUrl.match(/^(http|https|www)/);
+
+    if (researchSource === 'notebooklm' || researchSource === 'chatgpt' || researchSource === 'deepseek') {
+      setIsSearching(true);
+      try {
+        const res = await searchVideos(searchUrl, 1, researchLimit, researchSource);
+        setTrendingVideos(res.results);
+      } catch (e) {
+        const sourceLabel = researchSource === 'chatgpt' ? 'ChatGPT' : researchSource === 'deepseek' ? 'DeepSeek' : 'NotebookLM';
+        alert(`${sourceLabel} search failed`);
+      } finally {
+        setIsSearching(false);
+      }
+      return;
+    }
 
     if (isUrl) {
       handleDownload(searchUrl);
@@ -846,6 +867,9 @@ const App = () => {
             onChange={(e) => { setResearchSource(e.target.value); setResearchPage(1); }}
           >
             <option value="youtube">YouTube</option>
+            <option value="notebooklm">NotebookLM</option>
+            <option value="chatgpt">ChatGPT</option>
+            <option value="deepseek">DeepSeek</option>
             <option value="tiktok">TikTok</option>
             <option value="instagram">Instagram</option>
             <option value="twitter">X (Twitter)</option>
@@ -868,7 +892,7 @@ const App = () => {
           onClick={() => handleSearchOrDownload()}
           disabled={isDownloading || isSearching}
         >
-          {isDownloading || isSearching ? <Loader2 className="animate-spin" /> : (searchUrl.match(/^(http|https|www)/) ? 'Download' : 'Cari')}
+          {isDownloading || isSearching ? <Loader2 className="animate-spin" /> : (researchSource === 'notebooklm' ? 'Buat Notebook' : ((researchSource === 'chatgpt' || researchSource === 'deepseek') ? 'Riset' : (searchUrl.match(/^(http|https|www)/) ? 'Download' : 'Cari')))}
         </button>
       </div>
 
@@ -911,6 +935,11 @@ const App = () => {
         ) : trendingVideos.length > 0 ? (
           trendingVideos.map((video) => (
             <div key={video.id} className="bg-[#1a1a1a] border border-white/5 rounded-xl overflow-hidden group">
+              {video.source === 'notebooklm' || video.source === 'chatgpt' || video.source === 'deepseek' ? (
+                <div className="h-44 bg-slate-900 relative flex items-center justify-center overflow-hidden">
+                  <div className="text-slate-400 text-xs px-4 text-center">{video.source === 'chatgpt' ? 'ChatGPT' : (video.source === 'deepseek' ? 'DeepSeek' : 'NotebookLM')}</div>
+                </div>
+              ) : (
               <div className="h-44 bg-slate-800 relative flex items-center justify-center overflow-hidden">
                 {video.thumbnail ? (
                   <img src={video.thumbnail} alt={video.title} className="w-full h-full object-cover" />
@@ -925,21 +954,53 @@ const App = () => {
                   <button className="p-3 bg-indigo-600 text-white rounded-full hover:scale-110 transition" onClick={() => handleDownload(video.url)}><Scissors size={20} /></button>
                 </div>
               </div>
+              )}
               <div className="p-4">
                 <h3 className="text-sm font-semibold mb-1 line-clamp-2" title={video.title}>{video.title}</h3>
+                {video.source === 'chatgpt' && (
+                  <p className="text-[11px] text-slate-400 mb-2 line-clamp-3">{video.summary}</p>
+                )}
                 <div className="flex items-center justify-between text-[11px] text-slate-500 mb-3">
-                  <span>{video.uploader || 'YouTube'} • {video.views ? (video.views / 1000).toFixed(1) + 'K' : 'N/A'} Views</span>
+                  <span>{video.source === 'notebooklm' ? 'NotebookLM' : (video.source === 'chatgpt' ? 'ChatGPT' : (video.source === 'deepseek' ? 'DeepSeek' : (video.uploader || 'YouTube')))} • {video.source === 'notebooklm' ? 'Notebook' : ((video.source === 'chatgpt' || video.source === 'deepseek') ? 'Ringkasan' : (video.views ? (video.views / 1000).toFixed(1) + 'K' : 'N/A') + ' Views')}</span>
                 </div>
                 <div className="flex gap-2">
-                  <button className="flex-1 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-[11px] font-bold transition">
-                    Pratinjau
-                  </button>
-                  <button
-                    className="flex-1 py-2 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600 hover:text-white rounded-lg text-[11px] font-bold transition"
-                    onClick={() => handleDownload(video.url)}
-                  >
-                    Download & Clip
-                  </button>
+                  {video.source === 'notebooklm' ? (
+                    <>
+                      <button className="flex-1 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-[11px] font-bold transition" onClick={() => window.open(video.url, '_blank')}>
+                        Buka Notebook
+                      </button>
+                      <button
+                        className="flex-1 py-2 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600 hover:text-white rounded-lg text-[11px] font-bold transition"
+                        onClick={() => navigator.clipboard.writeText(video.url)}
+                      >
+                        Salin Link
+                      </button>
+                    </>
+                  ) : (video.source === 'chatgpt' || video.source === 'deepseek') ? (
+                    <>
+                      <button className="flex-1 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-[11px] font-bold transition" onClick={() => navigator.clipboard.writeText(`${video.title}\n\n${video.summary || ''}`)}>
+                        Salin Ringkasan
+                      </button>
+                      <button
+                        className="flex-1 py-2 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600 hover:text-white rounded-lg text-[11px] font-bold transition"
+                        onClick={() => setSearchUrl(video.title)}
+                      >
+                        Gunakan Judul
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button className="flex-1 py-2 bg-white/5 hover:bg-white/10 rounded-lg text-[11px] font-bold transition">
+                        Pratinjau
+                      </button>
+                      <button
+                        className="flex-1 py-2 bg-indigo-600/20 text-indigo-400 hover:bg-indigo-600 hover:text-white rounded-lg text-[11px] font-bold transition"
+                        onClick={() => handleDownload(video.url)}
+                      >
+                        Download & Clip
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             </div>

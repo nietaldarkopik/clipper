@@ -132,6 +132,24 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
     const timelineRef = useRef<HTMLDivElement>(null);
     const previewContainerRef = useRef<HTMLDivElement>(null);
     const timelineScrollRef = useRef<HTMLDivElement>(null);
+    const trackHeadersRef = useRef<HTMLDivElement>(null);
+    const rulerRef = useRef<HTMLDivElement>(null);
+
+    const handleTimelineScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        if (trackHeadersRef.current) {
+            trackHeadersRef.current.scrollTop = e.currentTarget.scrollTop;
+        }
+        if (rulerRef.current) {
+            rulerRef.current.scrollLeft = e.currentTarget.scrollLeft;
+        }
+        // Sync scrollbar compensation if needed
+    };
+
+    const handleTrackHeaderWheel = (e: React.WheelEvent) => {
+        if (timelineScrollRef.current) {
+            timelineScrollRef.current.scrollTop += e.deltaY;
+        }
+    };
     
     // Helper State for Dragging
     const [hoveredLayerId, setHoveredLayerId] = useState<string | null>(null);
@@ -175,6 +193,7 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
     // Resizable Panels State
     const [leftSidebarWidth, setLeftSidebarWidth] = useState(300);
     const [rightSidebarWidth, setRightSidebarWidth] = useState(300);
+    const trackHeaderWidth = leftSidebarWidth;
     const [timelineHeight, setTimelineHeight] = useState(320);
 
     // Resizing Handlers
@@ -555,7 +574,7 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
              // Scrubbing logic
              const rect = timelineScrollRef.current?.getBoundingClientRect();
              if (rect) {
-                 const x = e.clientX - rect.left + (timelineScrollRef.current?.scrollLeft || 0) - 192; // 192 = track header width
+                 const x = e.clientX - rect.left + (timelineScrollRef.current?.scrollLeft || 0) - trackHeaderWidth;
                  const newTime = Math.max(0, x / (PIXELS_PER_SECOND * timelineZoom));
                  setCurrentTime(Math.min(newTime, duration));
              }
@@ -827,7 +846,8 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
             </div>
 
             {/* Main Workspace */}
-            <div className="flex-1 flex overflow-hidden">
+            <div className="flex-1 flex flex-col overflow-hidden">
+                <div className="flex flex-1 overflow-hidden">
                 {/* 1. Left Sidebar (Navigation + Panel) */}
                 <div className="flex border-r border-[#333] bg-[#1e1e1e]" style={{ width: leftSidebarWidth }}>
                     {/* Icon Strip */}
@@ -1035,7 +1055,7 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                     onMouseDown={startResizeLeft}
                 />
 
-                {/* 2. Center (Preview + Timeline) */}
+                {/* 2. Center (Preview) */}
                 <div className="flex-1 flex flex-col min-w-0 bg-[#0f0f0f]">
                     {/* Preview Area */}
                     <div className="flex-1 relative flex items-center justify-center p-8 overflow-hidden bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-[#1a1a1a] to-[#0a0a0a]">
@@ -1138,258 +1158,6 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                             </button>
                             <button onClick={() => setCurrentTime(duration)} className="hover:text-indigo-400"><SkipForward size={16}/></button>
                             <span className="font-mono text-xs w-20 text-center">{formatTime(currentTime)}</span>
-                        </div>
-                    </div>
-
-                    {/* Timeline Resize Handle */}
-                    <div 
-                        className="h-1 bg-[#333] hover:bg-indigo-500 cursor-row-resize z-20 transition-colors"
-                        onMouseDown={startResizeTimeline}
-                    />
-                    {/* Timeline Area */}
-                    <div className="bg-[#121212] flex flex-col border-t border-[#333]" style={{ height: timelineHeight }}>
-                        {/* Timeline Toolbar */}
-                        <div className="h-10 bg-[#1e1e1e] border-b border-[#333] flex items-center justify-between px-2">
-                            <div className="flex items-center gap-2">
-                                <button className="p-1.5 hover:bg-[#333] rounded" title="Add Video Track" onClick={() => setLayers([...layers, { id: `l${Date.now()}`, name: 'New Video', type: 'video', visible: true, locked: false, muted: false }])}>
-                                    <Video size={14} className="text-slate-400" />
-                                </button>
-                                <button className="p-1.5 hover:bg-[#333] rounded" title="Add Audio Track" onClick={() => setLayers([...layers, { id: `l${Date.now()}`, name: 'New Audio', type: 'audio', visible: true, locked: false, muted: false }])}>
-                                    <Music size={14} className="text-slate-400" />
-                                </button>
-                                <button className="p-1.5 hover:bg-[#333] rounded" title="Add Text Track" onClick={() => setLayers([...layers, { id: `l${Date.now()}`, name: 'New Text', type: 'text', visible: true, locked: false, muted: false }])}>
-                                    <Type size={14} className="text-slate-400" />
-                                </button>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <button onClick={() => setTimelineZoom(z => Math.max(0.2, z - 0.2))} className="p-1 hover:bg-[#333] rounded"><ZoomOut size={14} /></button>
-                                <input 
-                                    type="range" min="0.2" max="3" step="0.1" 
-                                    value={timelineZoom} 
-                                    onChange={(e) => setTimelineZoom(parseFloat(e.target.value))}
-                                    className="w-24 accent-indigo-500 h-1 bg-[#333] rounded appearance-none"
-                                />
-                                <button onClick={() => setTimelineZoom(z => Math.min(3, z + 0.2))} className="p-1 hover:bg-[#333] rounded"><ZoomIn size={14} /></button>
-                            </div>
-                        </div>
-
-                        {/* Tracks Container */}
-                        <div className="flex-1 flex relative overflow-hidden">
-                            {/* Left: Track Headers (Sticky) */}
-                            <div className="w-48 bg-[#1e1e1e] border-r border-[#333] flex flex-col z-20 shadow-lg">
-                                {/* Header Spacer */}
-                                <div className="h-8 border-b border-[#333] bg-[#181818] flex items-center px-2">
-                                    <span className="text-[10px] font-bold text-slate-500">TRACKS</span>
-                                </div>
-                                {/* Track List */}
-                                <div className="flex-1 overflow-hidden">
-                                    {layers.map(layer => (
-                                        <div key={layer.id} className="h-20 border-b border-[#333] flex flex-col justify-center px-3 gap-1 hover:bg-[#252525] group relative">
-                                            <div className="flex items-center justify-between">
-                                                <div className="flex items-center gap-2 overflow-hidden">
-                                                    {layer.type === 'video' && <Video size={12} className="text-indigo-400" />}
-                                                    {layer.type === 'audio' && <Music size={12} className="text-green-400" />}
-                                                    {layer.type === 'text' && <Type size={12} className="text-orange-400" />}
-                                                    <span className="text-xs font-medium truncate w-24">{layer.name}</span>
-                                                </div>
-                                                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                    <button onClick={() => setLayers(layers.map(l => l.id === layer.id ? { ...l, visible: !l.visible } : l))}>
-                                                        {layer.visible ? <Eye size={12} /> : <EyeOff size={12} className="text-slate-500" />}
-                                                    </button>
-                                                    <button onClick={() => setLayers(layers.map(l => l.id === layer.id ? { ...l, locked: !l.locked } : l))}>
-                                                        {layer.locked ? <Lock size={12} className="text-red-400" /> : <Unlock size={12} />}
-                                                    </button>
-                                                    {layer.type === 'audio' && (
-                                                        <button onClick={() => setLayers(layers.map(l => l.id === layer.id ? { ...l, muted: !l.muted } : l))}>
-                                                            {layer.muted ? <VolumeX size={12} className="text-red-400" /> : <Volume2 size={12} />}
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            {/* Delete Btn */}
-                                            <button 
-                                                onClick={() => {
-                                                     if(confirm('Delete this track?')) setLayers(layers.filter(l => l.id !== layer.id));
-                                                }}
-                                                className="absolute right-1 top-1 opacity-0 group-hover:opacity-100 p-1 hover:bg-red-900/50 rounded text-red-400"
-                                            >
-                                                <Trash2 size={10} />
-                                            </button>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-
-                            {/* Right: Timeline Content (Scrollable) */}
-                            <div 
-                                className="flex-1 overflow-auto relative bg-[#121212]" 
-                                ref={timelineScrollRef}
-                                onMouseMove={e => {
-                                    if(dragging?.type === 'scrub') {
-                                        handleTimelineMouseMove(e);
-                                    }
-                                }}
-                                onMouseDown={e => {
-                                     // Click on empty space to scrub
-                                     if(e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('timeline-track')) {
-                                        const rect = e.currentTarget.getBoundingClientRect();
-                                        const x = e.clientX - rect.left + e.currentTarget.scrollLeft;
-                                        const newTime = Math.max(0, x / (PIXELS_PER_SECOND * timelineZoom));
-                                        setCurrentTime(newTime);
-                                        setDragging({ id: 'playhead', type: 'scrub', startX: e.clientX, initialStart: newTime, initialDuration: 0, initialOffset: 0 });
-                                     }
-                                }}
-                            >
-                                <div className="min-w-full relative" style={{ width: `${duration * PIXELS_PER_SECOND * timelineZoom}px`, minHeight: '100%' }}>
-                                    {/* Ruler */}
-                                    <div 
-                                        className="h-8 border-b border-[#333] bg-[#181818] sticky top-0 z-10 flex items-end text-[10px] text-slate-500 cursor-pointer"
-                                        onMouseDown={(e) => {
-                                            const rect = e.currentTarget.getBoundingClientRect();
-                                            const x = e.clientX - rect.left;
-                                            const newTime = Math.max(0, x / (PIXELS_PER_SECOND * timelineZoom));
-                                            setCurrentTime(newTime);
-                                            setDragging({ id: 'playhead', type: 'scrub', startX: e.clientX, initialStart: newTime, initialDuration: 0, initialOffset: 0 });
-                                        }}
-                                    >
-                                        {Array.from({ length: Math.ceil(duration) }).map((_, i) => (
-                                            <div key={i} className="absolute bottom-0 border-l border-[#444] h-3 pl-1 pointer-events-none" style={{ left: i * PIXELS_PER_SECOND * timelineZoom }}>
-                                                {i % 5 === 0 && <span>{formatTime(i).split(':')[1]}:{formatTime(i).split(':')[2]}</span>}
-                                            </div>
-                                        ))}
-                                    </div>
-
-                                    {/* Tracks */}
-                                    <div className="flex flex-col">
-                                        {layers.map(layer => (
-                                            <div 
-                                                key={layer.id} 
-                                                className={`h-20 border-b border-[#333] relative timeline-track ${hoveredLayerId === layer.id ? 'bg-[#1a1a1a]' : ''}`}
-                                                onDragOver={(e) => { e.preventDefault(); setHoveredLayerId(layer.id); }}
-                                                onDragLeave={() => setHoveredLayerId(null)}
-                                                onDrop={(e) => { setHoveredLayerId(null); handleDrop(e, layer.id); }}
-                                            >
-                                                {/* Clips */}
-                                                {clips.filter(c => c.layerId === layer.id).map(clip => {
-                                                    const style = getClipStyle(clip);
-                                                    const isSelected = selectedClipId === clip.id;
-                                                    
-                                                    return (
-                                                        <div 
-                                                            key={clip.id}
-                                                            className={`absolute top-2 h-16 rounded overflow-hidden cursor-pointer group border-2 ${isSelected ? 'border-indigo-500 z-10' : 'border-transparent hover:border-white/20'}`}
-                                                            style={{ 
-                                                                left: style.left, 
-                                                                width: style.width,
-                                                                backgroundColor: clip.type === 'video' ? '#312e81' : (clip.type === 'audio' ? '#064e3b' : '#7c2d12')
-                                                            }}
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                if (e.shiftKey) {
-                                                                    const newSet = new Set(selectedClipIds);
-                                                                    
-                                                                    if (selectedClipId) {
-                                                                        // Range selection
-                                                                        const sortedClips = [...clips].sort((a, b) => a.start - b.start);
-                                                                        const lastIdx = sortedClips.findIndex(c => c.id === selectedClipId);
-                                                                        const currentIdx = sortedClips.findIndex(c => c.id === clip.id);
-                                                                        
-                                                                        if (lastIdx !== -1 && currentIdx !== -1) {
-                                                                            const start = Math.min(lastIdx, currentIdx);
-                                                                            const end = Math.max(lastIdx, currentIdx);
-                                                                            
-                                                                            for(let i = start; i <= end; i++) {
-                                                                                newSet.add(sortedClips[i].id);
-                                                                            }
-                                                                        } else {
-                                                                            // Fallback to simple toggle if something wrong
-                                                                             if (newSet.has(clip.id)) newSet.delete(clip.id);
-                                                                             else newSet.add(clip.id);
-                                                                        }
-                                                                    } else {
-                                                                        // Simple toggle if no primary selection
-                                                                        if (newSet.has(clip.id)) newSet.delete(clip.id);
-                                                                        else newSet.add(clip.id);
-                                                                    }
-                                                                    
-                                                                    setSelectedClipIds(newSet);
-                                                                    // Update primary selection to the clicked one
-                                                                    setSelectedClipId(clip.id);
-                                                                } else {
-                                                                    setSelectedClipId(clip.id);
-                                                                    setSelectedClipIds(new Set([clip.id]));
-                                                                }
-                                                            }}
-                                                            onMouseDown={(e) => {
-                                                                e.stopPropagation();
-                                                                setDragging({ 
-                                                                    id: clip.id, 
-                                                                    type: 'move', 
-                                                                    startX: e.clientX, 
-                                                                    initialStart: clip.start,
-                                                                    initialDuration: clip.duration,
-                                                                    initialOffset: clip.offset
-                                                                });
-                                                            }}
-                                                        >
-                                                            {/* Label */}
-                                                            <div className="px-2 py-1 text-[10px] font-bold truncate text-white/90 drop-shadow-md pointer-events-none">
-                                                                {clip.content || (clip.type === 'video' ? 'Video Clip' : 'Audio Clip')}
-                                                            </div>
-
-                                                            {/* Resize Handles */}
-                                                            {isSelected && (
-                                                                <>
-                                                                    <div 
-                                                                        className="absolute left-0 top-0 bottom-0 w-3 cursor-w-resize hover:bg-white/20 flex items-center justify-center"
-                                                                        onMouseDown={(e) => {
-                                                                            e.stopPropagation();
-                                                                            setDragging({ 
-                                                                                id: clip.id, 
-                                                                                type: 'resize-start', 
-                                                                                startX: e.clientX, 
-                                                                                initialStart: clip.start, 
-                                                                                initialDuration: clip.duration,
-                                                                                initialOffset: clip.offset
-                                                                            });
-                                                                        }}
-                                                                    >
-                                                                        <GripVertical size={12} className="opacity-50" />
-                                                                    </div>
-                                                                    <div 
-                                                                        className="absolute right-0 top-0 bottom-0 w-3 cursor-e-resize hover:bg-white/20 flex items-center justify-center"
-                                                                        onMouseDown={(e) => {
-                                                                            e.stopPropagation();
-                                                                            setDragging({ 
-                                                                                id: clip.id, 
-                                                                                type: 'resize-end', 
-                                                                                startX: e.clientX, 
-                                                                                initialStart: clip.start, 
-                                                                                initialDuration: clip.duration,
-                                                                                initialOffset: clip.offset
-                                                                            });
-                                                                        }}
-                                                                    >
-                                                                        <GripVertical size={12} className="opacity-50" />
-                                                                    </div>
-                                                                </>
-                                                            )}
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        ))}
-                                    </div>
-
-                                    {/* Playhead */}
-                                    <div 
-                                        className="absolute top-0 bottom-0 w-px bg-red-500 z-30 pointer-events-none"
-                                        style={{ left: currentTime * PIXELS_PER_SECOND * timelineZoom }}
-                                    >
-                                        <div className="w-3 h-3 -ml-1.5 bg-red-500 rotate-45 transform -translate-y-1.5"></div>
-                                    </div>
-                                </div>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -1698,6 +1466,269 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                             <span className="text-xs">Select a clip to edit</span>
                         </div>
                     )}
+                </div>
+                </div>
+
+                {/* Timeline Resize Handle */}
+                <div 
+                    className="h-1 bg-[#333] hover:bg-indigo-500 cursor-row-resize z-20 transition-colors"
+                    onMouseDown={startResizeTimeline}
+                />
+                {/* Timeline Area */}
+                <div className="bg-[#121212] flex flex-col border-t border-[#333]" style={{ height: timelineHeight }}>
+                    {/* Timeline Toolbar */}
+                    <div className="h-10 bg-[#1e1e1e] border-b border-[#333] flex items-center justify-between px-2">
+                        <div className="flex items-center gap-2">
+                            <button className="p-1.5 hover:bg-[#333] rounded" title="Add Video Track" onClick={() => setLayers([...layers, { id: `l${Date.now()}`, name: 'New Video', type: 'video', visible: true, locked: false, muted: false }])}>
+                                <Video size={14} className="text-slate-400" />
+                            </button>
+                            <button className="p-1.5 hover:bg-[#333] rounded" title="Add Audio Track" onClick={() => setLayers([...layers, { id: `l${Date.now()}`, name: 'New Audio', type: 'audio', visible: true, locked: false, muted: false }])}>
+                                <Music size={14} className="text-slate-400" />
+                            </button>
+                            <button className="p-1.5 hover:bg-[#333] rounded" title="Add Text Track" onClick={() => setLayers([...layers, { id: `l${Date.now()}`, name: 'New Text', type: 'text', visible: true, locked: false, muted: false }])}>
+                                <Type size={14} className="text-slate-400" />
+                            </button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button onClick={() => setTimelineZoom(z => Math.max(0.2, z - 0.2))} className="p-1 hover:bg-[#333] rounded"><ZoomOut size={14} /></button>
+                            <input 
+                                type="range" min="0.2" max="3" step="0.1" 
+                                value={timelineZoom} 
+                                onChange={(e) => setTimelineZoom(parseFloat(e.target.value))}
+                                className="w-24 accent-indigo-500 h-1 bg-[#333] rounded appearance-none"
+                            />
+                            <button onClick={() => setTimelineZoom(z => Math.min(3, z + 0.2))} className="p-1 hover:bg-[#333] rounded"><ZoomIn size={14} /></button>
+                        </div>
+                    </div>
+
+                    {/* Timeline Header Row (Fixed) */}
+                    <div className="flex border-b border-[#333] bg-[#181818] z-20 shadow-sm relative">
+                        {/* Tracks Label */}
+                        <div className="flex-shrink-0 border-r border-[#333] flex items-center px-2 h-8 bg-[#1e1e1e]" style={{ width: trackHeaderWidth }}>
+                            <span className="text-[10px] font-bold text-slate-500">TRACKS</span>
+                        </div>
+                        
+                        {/* Ruler Container (Hidden Scroll) */}
+                        <div className="flex-1 overflow-hidden relative" ref={rulerRef}>
+                            {/* Ruler Content */}
+                            <div 
+                                className="h-8 flex items-end text-[10px] text-slate-500 cursor-pointer relative"
+                                style={{ width: `${duration * PIXELS_PER_SECOND * timelineZoom}px` }}
+                                onMouseDown={(e) => {
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    const x = e.clientX - rect.left;
+                                    const newTime = Math.max(0, x / (PIXELS_PER_SECOND * timelineZoom));
+                                    setCurrentTime(newTime);
+                                    setDragging({ id: 'playhead', type: 'scrub', startX: e.clientX, initialStart: newTime, initialDuration: 0, initialOffset: 0 });
+                                }}
+                            >
+                                {Array.from({ length: Math.ceil(duration) }).map((_, i) => (
+                                    <div key={i} className="absolute bottom-0 border-l border-[#444] h-3 pl-1 pointer-events-none" style={{ left: i * PIXELS_PER_SECOND * timelineZoom }}>
+                                        {i % 5 === 0 && <span>{formatTime(i).split(':')[1]}:{formatTime(i).split(':')[2]}</span>}
+                                    </div>
+                                ))}
+                                
+                                {/* Playhead Indicator (Triangle) */}
+                                <div 
+                                    className="absolute bottom-0 w-3 h-3 -ml-1.5 bg-red-500 rotate-45 transform translate-y-1.5 z-40 pointer-events-none"
+                                    style={{ left: currentTime * PIXELS_PER_SECOND * timelineZoom }}
+                                />
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Tracks Container */}
+                    <div className="flex-1 flex relative overflow-hidden">
+                        {/* Left: Track Headers (Sticky) */}
+                        <div className="bg-[#1e1e1e] border-r border-[#333] flex flex-col z-20 shadow-lg overflow-hidden" style={{ width: trackHeaderWidth }} ref={trackHeadersRef} onWheel={handleTrackHeaderWheel}>
+                            {/* Track List */}
+                            <div className="flex-1">
+                                {layers.map(layer => (
+                                    <div key={layer.id} className="h-20 border-b border-[#333] flex flex-col justify-center px-3 gap-1 hover:bg-[#252525] group relative">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-2 overflow-hidden">
+                                                {layer.type === 'video' && <Video size={12} className="text-indigo-400" />}
+                                                {layer.type === 'audio' && <Music size={12} className="text-green-400" />}
+                                                {layer.type === 'text' && <Type size={12} className="text-orange-400" />}
+                                                <span className="text-xs font-medium truncate w-24">{layer.name}</span>
+                                            </div>
+                                            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                <button onClick={() => setLayers(layers.map(l => l.id === layer.id ? { ...l, visible: !l.visible } : l))}>
+                                                    {layer.visible ? <Eye size={12} /> : <EyeOff size={12} className="text-slate-500" />}
+                                                </button>
+                                                <button onClick={() => setLayers(layers.map(l => l.id === layer.id ? { ...l, locked: !l.locked } : l))}>
+                                                    {layer.locked ? <Lock size={12} className="text-red-400" /> : <Unlock size={12} />}
+                                                </button>
+                                                {layer.type === 'audio' && (
+                                                    <button onClick={() => setLayers(layers.map(l => l.id === layer.id ? { ...l, muted: !l.muted } : l))}>
+                                                        {layer.muted ? <VolumeX size={12} className="text-red-400" /> : <Volume2 size={12} />}
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {/* Delete Btn */}
+                                        <button 
+                                            onClick={() => {
+                                                 if(confirm('Delete this track?')) setLayers(layers.filter(l => l.id !== layer.id));
+                                            }}
+                                            className="absolute right-1 top-1 opacity-0 group-hover:opacity-100 p-1 hover:bg-red-900/50 rounded text-red-400"
+                                        >
+                                            <Trash2 size={10} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Right: Timeline Content (Scrollable) */}
+                        <div 
+                            className="flex-1 overflow-auto relative bg-[#121212]" 
+                            ref={timelineScrollRef}
+                            onScroll={handleTimelineScroll}
+                            onMouseMove={e => {
+                                if(dragging?.type === 'scrub') {
+                                    handleTimelineMouseMove(e);
+                                }
+                            }}
+                            onMouseDown={e => {
+                                 if(e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('timeline-track')) {
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    const x = e.clientX - rect.left + e.currentTarget.scrollLeft;
+                                    const newTime = Math.max(0, x / (PIXELS_PER_SECOND * timelineZoom));
+                                    setCurrentTime(newTime);
+                                    setDragging({ id: 'playhead', type: 'scrub', startX: e.clientX, initialStart: newTime, initialDuration: 0, initialOffset: 0 });
+                                 }
+                            }}
+                        >
+                            <div className="min-w-full relative" style={{ width: `${duration * PIXELS_PER_SECOND * timelineZoom}px`, minHeight: '100%' }}>
+                                {/* Tracks */}
+                                <div className="flex flex-col">
+                                    {layers.map(layer => (
+                                        <div 
+                                            key={layer.id} 
+                                            className={`h-20 border-b border-[#333] relative timeline-track ${hoveredLayerId === layer.id ? 'bg-[#1a1a1a]' : ''}`}
+                                            onDragOver={(e) => { e.preventDefault(); setHoveredLayerId(layer.id); }}
+                                            onDragLeave={() => setHoveredLayerId(null)}
+                                            onDrop={(e) => { setHoveredLayerId(null); handleDrop(e, layer.id); }}
+                                        >
+                                            {/* Clips */}
+                                            {clips.filter(c => c.layerId === layer.id).map(clip => {
+                                                const style = getClipStyle(clip);
+                                                const isSelected = selectedClipId === clip.id;
+                                                
+                                                return (
+                                                    <div 
+                                                        key={clip.id}
+                                                        className={`absolute top-2 h-16 rounded overflow-hidden cursor-pointer group border-2 ${isSelected ? 'border-indigo-500 z-10' : 'border-transparent hover:border-white/20'}`}
+                                                        style={{ 
+                                                            left: style.left, 
+                                                            width: style.width,
+                                                            backgroundColor: clip.type === 'video' ? '#312e81' : (clip.type === 'audio' ? '#064e3b' : '#7c2d12')
+                                                        }}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            if (e.shiftKey) {
+                                                                const newSet = new Set(selectedClipIds);
+                                                                
+                                                                if (selectedClipId) {
+                                                                    const sortedClips = [...clips].sort((a, b) => a.start - b.start);
+                                                                    const lastIdx = sortedClips.findIndex(c => c.id === selectedClipId);
+                                                                    const currentIdx = sortedClips.findIndex(c => c.id === clip.id);
+                                                                    
+                                                                    if (lastIdx !== -1 && currentIdx !== -1) {
+                                                                        const start = Math.min(lastIdx, currentIdx);
+                                                                        const end = Math.max(lastIdx, currentIdx);
+                                                                        
+                                                                        for(let i = start; i <= end; i++) {
+                                                                            newSet.add(sortedClips[i].id);
+                                                                        }
+                                                                    } else {
+                                                                         if (newSet.has(clip.id)) newSet.delete(clip.id);
+                                                                         else newSet.add(clip.id);
+                                                                    }
+                                                                } else {
+                                                                    if (newSet.has(clip.id)) newSet.delete(clip.id);
+                                                                    else newSet.add(clip.id);
+                                                                }
+                                                                
+                                                                setSelectedClipIds(newSet);
+                                                                setSelectedClipId(clip.id);
+                                                            } else {
+                                                                setSelectedClipId(clip.id);
+                                                                setSelectedClipIds(new Set([clip.id]));
+                                                            }
+                                                        }}
+                                                        onMouseDown={(e) => {
+                                                            e.stopPropagation();
+                                                            setDragging({ 
+                                                                id: clip.id, 
+                                                                type: 'move', 
+                                                                startX: e.clientX, 
+                                                                initialStart: clip.start,
+                                                                initialDuration: clip.duration,
+                                                                initialOffset: clip.offset
+                                                            });
+                                                        }}
+                                                    >
+                                                        {/* Label */}
+                                                        <div className="px-2 py-1 text-[10px] font-bold truncate text-white/90 drop-shadow-md pointer-events-none">
+                                                            {clip.content || (clip.type === 'video' ? 'Video Clip' : 'Audio Clip')}
+                                                        </div>
+
+                                                        {/* Resize Handles */}
+                                                        {isSelected && (
+                                                            <>
+                                                                <div 
+                                                                    className="absolute left-0 top-0 bottom-0 w-3 cursor-w-resize hover:bg-white/20 flex items-center justify-center"
+                                                                    onMouseDown={(e) => {
+                                                                        e.stopPropagation();
+                                                                        setDragging({ 
+                                                                            id: clip.id, 
+                                                                            type: 'resize-start', 
+                                                                            startX: e.clientX, 
+                                                                            initialStart: clip.start, 
+                                                                            initialDuration: clip.duration,
+                                                                            initialOffset: clip.offset
+                                                                        });
+                                                                    }}
+                                                                >
+                                                                    <GripVertical size={12} className="opacity-50" />
+                                                                </div>
+                                                                <div 
+                                                                    className="absolute right-0 top-0 bottom-0 w-3 cursor-e-resize hover:bg-white/20 flex items-center justify-center"
+                                                                    onMouseDown={(e) => {
+                                                                        e.stopPropagation();
+                                                                        setDragging({ 
+                                                                            id: clip.id, 
+                                                                            type: 'resize-end', 
+                                                                            startX: e.clientX, 
+                                                                            initialStart: clip.start, 
+                                                                            initialDuration: clip.duration,
+                                                                            initialOffset: clip.offset
+                                                                        });
+                                                                    }}
+                                                                >
+                                                                    <GripVertical size={12} className="opacity-50" />
+                                                                </div>
+                                                            </>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ))}
+                                </div>
+
+                                {/* Playhead */}
+                                <div 
+                                    className="absolute top-0 bottom-0 w-px bg-red-500 z-30 pointer-events-none"
+                                    style={{ left: currentTime * PIXELS_PER_SECOND * timelineZoom }}
+                                >
+                                    <div className="w-3 h-3 -ml-1.5 bg-red-500 rotate-45 transform -translate-y-1.5"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 

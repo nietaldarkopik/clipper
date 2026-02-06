@@ -156,8 +156,13 @@ export const startWorkers = () => {
       });
 
       console.log(`[Download] Completed ${id}`);
-      const filePath = path.join(downloadsDir, `${id}.mp4`);
+      const downloadedFilePath = path.join(downloadsDir, `${id}.mp4`);
+      const processedFilePath = path.join(processedDir, `${id}.mp4`);
       const infoJsonPath = path.join(downloadsDir, `${id}.info.json`);
+
+      // Move the downloaded video to the processed directory
+      await fs.move(downloadedFilePath, processedFilePath, { overwrite: true });
+      console.log(`[Download] Moved ${downloadedFilePath} to ${processedFilePath}`);
 
       // Read metadata from info.json
       let metadata: any = { title: `Video ${id}` };
@@ -201,30 +206,23 @@ export const startWorkers = () => {
         console.warn('Failed to process transcripts', e);
       }
 
-      // Save Video Metadata to DB
+      // Update video status to completed and save metadata
+      saveVideo({ id, status: 'completed', progress: 100, filepath: processedFilePath, ...metadata });
+
+      // Save Job Metadata to DB
       try {
-        saveVideo({
-          id,
-          url,
-          filepath: filePath,
-          source: 'youtube',
-          ...metadata,
-          created_at: new Date().toISOString(),
-          status: 'completed',
-          progress: 100
-        });
         saveJob({
           id: job.id || id,
           type: 'download',
           status: 'completed',
           progress: 100,
-          result: { filePath }
+          result: { filePath: processedFilePath }
         });
       } catch (dbErr) {
-        console.error('[DB] Failed to save video data', dbErr);
+        console.error('[DB] Failed to save job data', dbErr);
       }
 
-      return { status: 'completed', filePath };
+      return { status: 'completed', filePath: processedFilePath };
     } catch (error: any) {
       console.error(`[Download] Failed ${id}`, error);
       // Update status to failed
@@ -593,7 +591,7 @@ export const startWorkers = () => {
   console.log('Workers initialized: Download, Process, Analyze, Upload');
 
   const autoWorker = createWorker('auto', async (job: Job) => {
-    const { keyword, count, platform = 'youtube', projectId } = job.data;
+    const { keyword, count, platform = 'youtube', projectId, selectedVideos } = job.data;
     const logs: string[] = [];
 
     const addLog = async (msg: string) => {
@@ -609,26 +607,34 @@ export const startWorkers = () => {
     job.updateProgress(5);
 
     try {
-      // 1. SEARCH
-      await addLog(`Searching for viral content on ${platform}...`);
       let results: any[] = [];
-      if (platform === 'youtube') {
-        const searchParam = `ytsearch${count}:${keyword}`;
-        try {
-          const output = await ytDlp(searchParam, {
-            dumpSingleJson: true,
-            noWarnings: true,
-            flatPlaylist: true,
-            noCheckCertificate: true,
-            ffmpegLocation: ffmpegPath || undefined
-          });
-          results = (output as any).entries || [];
-        } catch (searchErr: any) {
-          await addLog(`YouTube search error: ${searchErr.message}`);
-          throw searchErr;
-        }
+      if (Array.isArray(selectedVideos) && selectedVideos.length > 0) {
+        results = selectedVideos.map((item: any) => ({
+          id: item.id || item.url,
+          title: item.title,
+          url: item.url
+        }));
+        await addLog(`Using ${results.length} selected videos for processing.`);
       } else {
-        results = await scrapeSearch(keyword, platform, count);
+        await addLog(`Searching for viral content on ${platform}...`);
+        if (platform === 'youtube') {
+          const searchParam = `ytsearch${count}:${keyword}`;
+          try {
+            const output = await ytDlp(searchParam, {
+              dumpSingleJson: true,
+              noWarnings: true,
+              flatPlaylist: true,
+              noCheckCertificate: true,
+              ffmpegLocation: ffmpegPath || undefined
+            });
+            results = (output as any).entries || [];
+          } catch (searchErr: any) {
+            await addLog(`YouTube search error: ${searchErr.message}`);
+            throw searchErr;
+          }
+        } else {
+          results = await scrapeSearch(keyword, platform, count);
+        }
       }
 
       const totalVideos = results.length;

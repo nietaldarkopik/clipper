@@ -1,9 +1,7 @@
 import axios from 'axios';
 
-// Automatically detect base URL:
-// - If VITE_API_URL is set (via .env), use it
-// - Otherwise, default to relative path (empty string) for same-origin proxy
-export const BASE_URL = localStorage.getItem('VITE_API_URL') || import.meta.env.VITE_API_URL || '';
+const storedBaseUrl = localStorage.getItem('VITE_API_URL');
+export const BASE_URL = storedBaseUrl && storedBaseUrl.trim() ? storedBaseUrl : (import.meta.env.VITE_API_URL || '');
 const API_URL = `${BASE_URL}/api`;
 
 export const api = axios.create({
@@ -15,6 +13,11 @@ export const api = axios.create({
 
 // Helper to update base URL dynamically
 export const setApiBaseUrl = (url: string) => {
+  if (!url || !url.trim()) {
+    localStorage.removeItem('VITE_API_URL');
+    api.defaults.baseURL = `${import.meta.env.VITE_API_URL || ''}/api`;
+    return;
+  }
   localStorage.setItem('VITE_API_URL', url);
   api.defaults.baseURL = `${url}/api`;
 };
@@ -218,8 +221,13 @@ export const unprocessClip = async (id: string) => {
 };
 
 // Auto
-export const runAutoProcess = async (params: { keyword?: string, count?: number, platform?: string, projectId?: string }) => {
+export const runAutoProcess = async (params: { keyword?: string, count?: number, platform?: string, projectId?: string, selectedVideos?: Array<{ id?: string, title?: string, url: string }> }) => {
   const response = await api.post('/auto/run', params);
+  return response.data;
+};
+
+export const searchAutoVideos = async (params: { keyword?: string, count?: number, platform?: string }) => {
+  const response = await api.post('/auto/search', params);
   return response.data;
 };
 
