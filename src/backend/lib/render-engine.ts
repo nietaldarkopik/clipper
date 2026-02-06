@@ -1,6 +1,4 @@
 import ffmpeg from 'fluent-ffmpeg';
-import path from 'path';
-import fs from 'fs-extra';
 
 interface Clip {
     id: string;

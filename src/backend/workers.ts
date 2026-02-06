@@ -7,7 +7,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
 import crypto from 'crypto';
 import { getAIService } from './lib/ai-service';
-import { saveVideo, saveTranscript, saveClip, saveJob, getVideo, getTranscripts, getSettings, saveUploadHistory } from './lib/db';
+import { saveVideo, saveTranscript, saveClip, saveJob, getVideo, saveUploadHistory } from './lib/db';
 import { scrapeSearch } from './lib/web-scraper';
 import { renderProjectVideo } from './lib/render-engine';
 

@@ -37,7 +37,7 @@ export default async function researchRoutes(fastify: FastifyInstance) {
   };
 
   const createNotebook = async (title: string) => {
-    const result = await notebooklmRequest('/notebooks', 'POST', { title });
+    const result: any = await notebooklmRequest('/notebooks', 'POST', { title });
     return { notebookId: result.notebookId as string };
   };
 
@@ -246,7 +246,7 @@ export default async function researchRoutes(fastify: FastifyInstance) {
           await addNotebookSources(notebookId, [{ url: query, title: query }]);
         } else {
           const sources = await fetchFromYoutube(query, 1, Math.min(limit, 12));
-          const sourceList = sources.map(item => ({ url: item.url, title: item.title }));
+          const sourceList = sources.map((item: any) => ({ url: item.url, title: item.title }));
           if (sourceList.length > 0) {
             await addNotebookSources(notebookId, sourceList);
           }

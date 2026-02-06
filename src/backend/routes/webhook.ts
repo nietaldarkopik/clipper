@@ -8,7 +8,7 @@ const execAsync = util.promisify(exec);
 
 export default async function webhookRoutes(fastify: FastifyInstance) {
   // GET endpoint for easy testing/verification
-  fastify.get('/webhook/deploy', async (request, reply) => {
+  fastify.get('/webhook/deploy', async (_request, reply) => {
     return reply.send({ 
       status: 'ok', 
       message: 'Webhook endpoint is active. Please use POST request with valid token and payload to trigger deployment.' 

@@ -536,7 +536,7 @@ export class OpenAIService implements AIService {
     }
   }
 
-  async *generateSummaryStream(transcript: TranscriptSegment[]): AsyncGenerator<string> {
+  async *generateSummaryStream(_transcript: TranscriptSegment[]): AsyncGenerator<string> {
       yield "Streaming summary not implemented for OpenAI service yet.";
   }
 

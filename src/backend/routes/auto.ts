@@ -56,7 +56,7 @@ export default async function autoRoutes(fastify: FastifyInstance) {
     });
 
     // POST /auto/run
-    fastify.post('/run', async (request, reply) => {
+    fastify.post('/run', async (request, _reply) => {
         const { keyword, count = 3, platform = 'youtube', projectId, selectedVideos } = request.body as {
             keyword?: string,
             count?: number,
