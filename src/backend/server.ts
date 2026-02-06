@@ -46,6 +46,14 @@ fastify.register(autoRoutes, { prefix: '/api/auto' });
 fastify.register(editorRoutes, { prefix: '/api' });
 fastify.register(webhookRoutes, { prefix: '/api' });
 
+// Serve Assets Directory (Vite build output)
+fastify.register(fastifyStatic, {
+  root: path.join(__dirname, '../../dist/renderer/assets'),
+  prefix: '/assets/',
+  decorateReply: false,
+  wildcard: true
+});
+
 // Serve Static Files (Frontend)
 fastify.register(fastifyStatic, {
   root: path.join(__dirname, '../../dist/renderer'),
