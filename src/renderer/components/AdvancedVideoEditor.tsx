@@ -7,9 +7,10 @@ import {
     Eye, EyeOff, Lock, Unlock, Download,
     Undo, Redo, AlignLeft, AlignCenter, AlignRight,
     Sticker, Wand2, Filter, Settings2, Sparkles, Ghost, Layout,
-    Search, Clock, VolumeX, Volume2, MousePointer2, Image as ImageIcon, X, Loader2
+    Search, Clock, VolumeX, Volume2, MousePointer2, Image as ImageIcon, X, Loader2, Camera, Circle, Square, StopCircle
 } from 'lucide-react';
 import { BASE_URL, renderProject } from '../api';
+import ClipWaveform from './ClipWaveform';
 
 interface Clip {
     id: string;
@@ -28,7 +29,8 @@ interface Clip {
     opacity: number;
     width?: number; // Display width (for text/image or if resized)
     height?: number;
-    // Crop properties (percentages 0-100)
+    // Crop properties (percentages 0-100) = (zoom / 50) * width;
+
     crop?: {
         enabled: boolean;
         top: number;
@@ -72,9 +74,16 @@ const FPS = 30;
 const PIXELS_PER_SECOND = 50; // Base Timeline zoom level
 
 export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose, onAnalyze, processingVideos }: AdvancedVideoEditorProps) => {
-    // --- State ---
+    // State
     const [currentTime, setCurrentTime] = useState(0);
     const [isPlaying, setIsPlaying] = useState(false);
+    
+    // Render State
+    const [renderJobId, setRenderJobId] = useState<string | null>(null);
+    const [renderStatus, setRenderStatus] = useState<'idle' | 'queued' | 'active' | 'completed' | 'failed'>('idle');
+    const [renderProgress, setRenderProgress] = useState(0);
+    const [renderLogs, setRenderLogs] = useState<string[]>([]);
+    
     const [duration, setDuration] = useState(300); // Default 5 mins timeline
     const [aspectRatio, setAspectRatio] = useState<'16/9' | '9/16' | '1/1'>('16/9');
     
@@ -89,6 +98,51 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
     const [clips, setClips] = useState<Clip[]>([]);
     const [selectedClipIds, setSelectedClipIds] = useState<Set<string>>(new Set());
     const [selectedClipId, setSelectedClipId] = useState<string | null>(null); // Keep for backward compat/primary selection
+
+    // Calculate max duration based on clips
+    useEffect(() => {
+        let maxClipTime = 0;
+        clips.forEach(clip => {
+            maxClipTime = Math.max(maxClipTime, clip.start + clip.duration);
+        });
+        // Ensure duration is at least 5 minutes or maxClipTime + 30 seconds padding
+        setDuration(Math.max(300, maxClipTime + 30)); 
+    }, [clips]);
+
+    // Poll Render Status
+    useEffect(() => {
+        if (!renderJobId || renderStatus === 'completed' || renderStatus === 'failed') return;
+
+        const interval = setInterval(async () => {
+            try {
+                // The backend route is actually /api/dashboard/status/:queueName/:jobId
+                // Based on video.ts: fastify.get('/dashboard/status/:queueName/:jobId', ...) mounted under /api
+                const response = await fetch(`${BASE_URL}/api/dashboard/status/render/${renderJobId}`);
+                if (!response.ok) return;
+                
+                const data = await response.json();
+                
+                setRenderStatus(data.state);
+                setRenderProgress(data.progress || 0);
+                if (data.logs && Array.isArray(data.logs)) {
+                    setRenderLogs(data.logs);
+                }
+                
+                if (data.state === 'completed') {
+                    // Render finished
+                    setRenderLogs(prev => [...prev, 'Render finished!', `Output: ${data.result?.filePath || 'Unknown'}`]);
+                    // Refresh videos? We don't have a refresh method prop.
+                    // But we can notify user.
+                } else if (data.state === 'failed') {
+                    setRenderLogs(prev => [...prev, `Error: ${data.error}`]);
+                }
+            } catch (e) {
+                console.error("Polling error", e);
+            }
+        }, 1000);
+
+        return () => clearInterval(interval);
+    }, [renderJobId, renderStatus]);
 
     // History (Undo/Redo)
     const [history, setHistory] = useState<{clips: Clip[], layers: Layer[]}[]>([]);
@@ -108,6 +162,10 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
         setClips(previous.clips);
         setLayers(previous.layers);
         setHistory(newHistory);
+    };
+
+    const clamp = (value: number, min = 0.25, max = 10) => {
+        return Math.min(max, Math.max(min, value));
     };
 
     const redo = () => {
@@ -133,16 +191,178 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
     const previewContainerRef = useRef<HTMLDivElement>(null);
     const timelineScrollRef = useRef<HTMLDivElement>(null);
     const trackHeadersRef = useRef<HTMLDivElement>(null);
+    const trackListRef = useRef<HTMLDivElement>(null);
     const rulerRef = useRef<HTMLDivElement>(null);
+    const rulerCanvasRef = useRef<HTMLCanvasElement>(null);
+    const rulerContentRef = useRef<HTMLDivElement>(null);
+    const timelineContainerRef = useRef<HTMLDivElement>(null);
+    const retryTracker = useRef<Record<string, boolean>>({});
+
+    useEffect(() => {
+        const timelineContainer = timelineContainerRef.current;
+        if (!timelineContainer) return;
+
+        const handleWheel = (e: WheelEvent) => {
+            if (!e.ctrlKey) return;
+
+            e.preventDefault();
+            setTimelineZoom(z =>
+                clamp(z * (e.deltaY > 0 ? 0.9 : 1.1))
+            );
+        };
+
+        timelineContainer.addEventListener('wheel', handleWheel, { passive: false });
+
+        return () => {
+            timelineContainer.removeEventListener('wheel', handleWheel);
+        };
+    }, [setTimelineZoom, clamp]);
+
+    const formatTime = (seconds: number) => {
+        const hrs = Math.floor(seconds / 3600);
+        const mins = Math.floor((seconds % 3600) / 60);
+        const secs = Math.floor(seconds % 60);
+        const frames = Math.floor((seconds % 1) * FPS);
+
+        if (hrs > 0) {
+            return `${hrs.toString().padStart(2, '0')}:` +
+                `${mins.toString().padStart(2, '0')}:` +
+                `${secs.toString().padStart(2, '0')}`;
+        }
+
+        return `${mins.toString().padStart(2, '0')}:` +
+            `${secs.toString().padStart(2, '0')}`;
+    };
+
+
+    const drawRuler = useCallback(() => {
+        if (!rulerCanvasRef.current || !timelineScrollRef.current || !rulerRef.current) return;
+        const canvas = rulerCanvasRef.current;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        // Match canvas size to client size
+        const rect = rulerRef.current?.getBoundingClientRect();
+        if (rect && (canvas.width !== rect.width || canvas.height !== rect.height)) {
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+        }
+
+        const scrollLeft = timelineScrollRef.current.scrollLeft;
+
+        // Sync ruler content position (playhead container)
+        if (rulerContentRef.current) {
+            rulerContentRef.current.style.transform = `translateX(-${scrollLeft}px)`;
+        }
+
+        const width = canvas.width;
+        const height = canvas.height;
+        // const zoom = timelineZoom;
+        const pps = PIXELS_PER_SECOND;
+        
+        // Use timelineZoom directly to match JSX rendering
+        const zoom = timelineZoom;
+
+        // Clear
+        ctx.clearRect(0, 0, width, height);
+        ctx.fillStyle = '#64748b'; // slate-500
+        ctx.strokeStyle = '#444'; // Border color
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'bottom';
+        ctx.lineWidth = 1;
+
+        // Calculate range
+        const startPixel = scrollLeft;
+        const endPixel = scrollLeft + width;
+        
+        // Determine step
+        let step = 1;
+        if (zoom < 0.03) step = 900;     // 15 min
+        else if (zoom < 0.07) step = 300; // 5 min
+        else if (zoom < 0.15) step = 60;
+        else if (zoom < 0.4) step = 30;
+        else if (zoom < 1) step = 10;
+        else if (zoom < 2) step = 5;
+        else if (zoom < 5) step = 1;
+        else step = 0.5;
+
+        // Draw Ticks
+        const secondsPerPixel = 1 / (pps * zoom);
+        const startTime = Math.floor((scrollLeft * secondsPerPixel) / step) * step;
+        const endTime = (scrollLeft + width) * secondsPerPixel + step;
+        const MAJOR_TICK_HEIGHT = 12;
+        const SUB_TICK_HEIGHT = 6;
+
+        ctx.beginPath();
+        for (let time = startTime; time <= endTime; time += step) {
+             if (time > duration) break;
+             const x = (time * pps * zoom) - scrollLeft;
+             
+             // Major tick
+             ctx.moveTo(Math.floor(x) + 0.5, height);
+             ctx.lineTo(Math.floor(x) + 0.5, height - MAJOR_TICK_HEIGHT);
+             
+             // Label
+             if (x >= 0 && x < width) {
+                // const text = step >= 60 ? formatTime(time).substring(0, 5) : formatTime(time).split(':')[1] + ':' + formatTime(time).split(':')[2];
+                const formatted = formatTime(time);
+                //const text =    step >= 60
+                //                    ? formatTime(time)
+                //                    : formatTime(time).slice(3);
+                //ctx.fillText(text, x + 4, height - 2);
+                //if (x + 30 < width) {
+                //    ctx.fillText(text, x + 4, height - 2);
+                //}
+                const text = formatTime(time);
+
+                if (x >= 0 && x + 40 < width) {
+                    ctx.fillText(text, x + 4, height - 2);
+                }
+             }
+
+             // Subticks
+             if (step >= 0.5) {
+                 const subStep = step === 0.5 ? 0.1 : (step / 5);
+                 // const subCount = step === 0.5 ? 5 : 5; 
+                 
+                 for (let j = 1; j < 5; j++) {
+                     const subTime = time + j * subStep;
+                     if (subTime > duration) break;
+                     const subX = (subTime * pps * zoom) - scrollLeft;
+                     if (subX >= 0 && subX <= width) {
+                        ctx.moveTo(Math.floor(subX) + 0.5, height);
+                        ctx.lineTo(Math.floor(subX) + 0.5, height - SUB_TICK_HEIGHT);
+                     }
+                 }
+             }
+        }
+        ctx.stroke();
+    }, [timelineZoom, duration, formatTime]);
+
+    useEffect(() => {
+        drawRuler();
+    }, [drawRuler]);
+
+    const lastScroll = useRef(0);
 
     const handleTimelineScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        // Sync sidebar scroll
         if (trackHeadersRef.current) {
             trackHeadersRef.current.scrollTop = e.currentTarget.scrollTop;
         }
-        if (rulerRef.current) {
-            rulerRef.current.scrollLeft = e.currentTarget.scrollLeft;
+
+        // Only redraw ruler if horizontal scroll changed
+        if (lastScroll.current !== e.currentTarget.scrollLeft) {
+            lastScroll.current = e.currentTarget.scrollLeft;
+            
+            // Direct update for smoother experience
+            if (rulerContentRef.current) {
+                rulerContentRef.current.style.transform = `translateX(-${lastScroll.current}px)`;
+            }
+            
+            requestAnimationFrame(drawRuler);
         }
-        // Sync scrollbar compensation if needed
     };
 
     const handleTrackHeaderWheel = (e: React.WheelEvent) => {
@@ -159,13 +379,122 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
     const [renderResolution, setRenderResolution] = useState('1080p');
     const [renderFormat, setRenderFormat] = useState('mp4');
 
-    // --- Helpers ---
-    const formatTime = (seconds: number) => {
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        const frames = Math.floor((seconds % 1) * FPS);
-        return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}:${frames.toString().padStart(2, '0')}`;
+    // Webcam State
+    const [isWebcamOpen, setIsWebcamOpen] = useState(false);
+    const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
+    const [isRecordingWebcam, setIsRecordingWebcam] = useState(false);
+    const [recordingTime, setRecordingTime] = useState(0);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const webcamVideoRef = useRef<HTMLVideoElement>(null);
+    const chunksRef = useRef<Blob[]>([]);
+    const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Webcam Handlers
+    const startWebcam = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+            setWebcamStream(stream);
+            setIsWebcamOpen(true);
+            if (webcamVideoRef.current) {
+                webcamVideoRef.current.srcObject = stream;
+            }
+        } catch (err) {
+            console.error("Error accessing webcam:", err);
+            alert("Could not access webcam/microphone. Please check permissions.");
+        }
     };
+
+    const stopWebcam = () => {
+        if (webcamStream) {
+            webcamStream.getTracks().forEach(track => track.stop());
+            setWebcamStream(null);
+        }
+        setIsWebcamOpen(false);
+        setIsRecordingWebcam(false);
+        if (timerRef.current) clearInterval(timerRef.current);
+        setRecordingTime(0);
+    };
+
+    const startRecordingWebcam = () => {
+        if (!webcamStream) return;
+        
+        const mediaRecorder = new MediaRecorder(webcamStream);
+        mediaRecorderRef.current = mediaRecorder;
+        chunksRef.current = [];
+
+        mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) {
+                chunksRef.current.push(e.data);
+            }
+        };
+
+        mediaRecorder.onstop = () => {
+            const blob = new Blob(chunksRef.current, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            
+            // Add to timeline
+            recordHistory();
+            const newClip: Clip = {
+                id: Math.random().toString(36).substr(2, 9),
+                type: 'video',
+                src: url,
+                content: `Webcam Recording ${new Date().toLocaleTimeString()}`,
+                start: currentTime,
+                duration: recordingTime,
+                offset: 0,
+                layerId: layers.find(l => l.type === 'video')?.id || 'l1',
+                x: 0, y: 0, scale: 1, rotation: 0, opacity: 1,
+                volume: 1,
+                fadeIn: 0, fadeOut: 0,
+                crop: { enabled: false, top: 0, bottom: 0, left: 0, right: 0 }
+            };
+            setClips(prev => [...prev, newClip]);
+            setSelectedClipId(newClip.id);
+            setSelectedClipIds(new Set([newClip.id]));
+            
+            stopWebcam();
+        };
+
+        mediaRecorder.start();
+        setIsRecordingWebcam(true);
+        setRecordingTime(0);
+        
+        timerRef.current = setInterval(() => {
+            setRecordingTime(t => t + 1);
+        }, 1000);
+    };
+
+    const stopRecordingWebcam = () => {
+        if (mediaRecorderRef.current && isRecordingWebcam) {
+            mediaRecorderRef.current.stop();
+            setIsRecordingWebcam(false);
+            if (timerRef.current) clearInterval(timerRef.current);
+        }
+    };
+
+    // --- Helpers ---
+    const handleClipError = (clipId: string, currentSrc: string | undefined) => {
+        if (!currentSrc) return;
+        
+        if (retryTracker.current[clipId]) {
+            console.warn("Clip load failed after retry:", clipId);
+            return;
+        }
+
+        let newSrc = currentSrc;
+        if (currentSrc.includes('/processed/')) {
+            newSrc = currentSrc.replace('/processed/', '/downloads/');
+        } else if (currentSrc.includes('/downloads/')) {
+            newSrc = currentSrc.replace('/downloads/', '/processed/');
+        } else {
+            return;
+        }
+        
+        console.log("Retrying clip load with new path:", clipId, newSrc);
+        retryTracker.current[clipId] = true;
+        setClips(prev => prev.map(c => c.id === clipId ? { ...c, src: newSrc } : c));
+    };
+
 
     const getClipStyle = (clip: Clip) => {
         const left = clip.start * PIXELS_PER_SECOND * timelineZoom;
@@ -181,8 +510,14 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
         if (saved) {
             try {
                 const data = JSON.parse(saved);
-                if (data.layers) setLayers(data.layers);
-                if (data.clips) setClips(data.clips);
+                if (data.layers) {
+                    console.log("Loaded layers:", data.layers);
+                    setLayers(data.layers);
+                }
+                if (data.clips) {
+                    console.log("Loaded clips:", data.clips);
+                    setClips(data.clips);
+                }
                 if (data.duration) setDuration(data.duration);
             } catch (e) {
                 console.error("Failed to load saved project", e);
@@ -269,6 +604,10 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
 
     const handleRender = async () => {
         try {
+            setRenderStatus('queued');
+            setRenderProgress(0);
+            setRenderLogs(['Initializing render job...']);
+            
             const projectData = {
                 projectId: project.id,
                 layers,
@@ -280,10 +619,13 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
             
             const result = await renderProject(projectData);
             
-            setRenderModalOpen(false);
-            alert(`Render started! Job ID: ${result.jobId}\nYou can check progress in the Dashboard.`);
+            setRenderJobId(result.jobId);
+            // setRenderModalOpen(false); // Keep open to show progress
+            // alert(`Render started! Job ID: ${result.jobId}\nYou can check progress in the Dashboard.`);
         } catch (error) {
             console.error('Failed to start render:', error);
+            setRenderStatus('failed');
+            setRenderLogs(['Failed to start render process.']);
             alert('Failed to start render process.');
         }
     };
@@ -296,7 +638,7 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
         const newClip: Clip = {
             id: Math.random().toString(36).substr(2, 9),
             type,
-            src: sourceVideo ? (sourceVideo.filepath ? `${BASE_URL}/downloads/${sourceVideo.filepath.split(/[\\/]/).pop()}` : sourceVideo.url) : undefined,
+            src: sourceVideo ? (sourceVideo.filepath ? `${BASE_URL}/${sourceVideo.filepath.includes('processed') ? 'processed' : 'downloads'}/${sourceVideo.filepath.split(/[\\/]/).pop()}` : sourceVideo.url) : undefined,
             content: type === 'text' ? (options?.content || 'New Text') : undefined,
             start: currentTime,
             duration: sourceVideo ? (sourceVideo.duration || 10) : 5, // Default duration
@@ -435,7 +777,12 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                     }
                     
                     if (isPlaying && mediaEl.paused) {
-                        mediaEl.play().catch(e => console.warn("Play failed", e));
+                        if (mediaEl.error) return; // Skip broken media
+                        mediaEl.play().catch(e => {
+                            if (e.name !== 'AbortError' && e.name !== 'NotSupportedError') {
+                                console.warn("Play failed", e);
+                            }
+                        });
                     }
                     if (!isPlaying && !mediaEl.paused) mediaEl.pause();
                 } else {
@@ -572,15 +919,32 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
 
         if (dragging.type === 'scrub') {
              // Scrubbing logic
-             const rect = timelineScrollRef.current?.getBoundingClientRect();
+             const rect = rulerContentRef.current?.getBoundingClientRect(); // Use rulerContentRef for consistency
              if (rect) {
-                 const x = e.clientX - rect.left + (timelineScrollRef.current?.scrollLeft || 0) - trackHeaderWidth;
+                 const x = e.clientX - rect.left + (timelineScrollRef.current?.scrollLeft || 0);
                  const newTime = Math.max(0, x / (PIXELS_PER_SECOND * timelineZoom));
                  setCurrentTime(Math.min(newTime, duration));
              }
         } else if (dragging.type === 'move') {
             // Calculate delta for the PRIMARY dragged clip
             let newStart = Math.max(0, dragging.initialStart + deltaTime);
+            let targetLayerId = dragging.initialStates?.[dragging.id]?.layerId || clips.find(c => c.id === dragging.id)?.layerId;
+
+            // Detect Track/Layer Hover
+            if (trackListRef.current) {
+                const rect = trackListRef.current.getBoundingClientRect();
+                const relativeY = e.clientY - rect.top;
+                const trackHeight = 80; // h-20 = 80px (Tailwind 5rem)
+                const trackIndex = Math.floor(relativeY / trackHeight);
+                
+                if (trackIndex >= 0 && trackIndex < layers.length) {
+                    const targetLayer = layers[trackIndex];
+                    if (targetLayer.id !== hoveredLayerId) {
+                        setHoveredLayerId(targetLayer.id);
+                    }
+                    targetLayerId = targetLayer.id;
+                }
+            }
             
             // Snapping (based on primary clip)
             const SNAP_THRESHOLD = 10 / (PIXELS_PER_SECOND * timelineZoom);
@@ -618,8 +982,8 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                          let changes: any = { start: updatedStart };
                          
                          if (c.id === dragging.id) {
-                             if (hoveredLayerId && hoveredLayerId !== state.layerId) {
-                                 changes.layerId = hoveredLayerId;
+                             if (targetLayerId && targetLayerId !== state.layerId) {
+                                 changes.layerId = targetLayerId;
                              }
                          }
                          return { ...c, ...changes };
@@ -629,8 +993,8 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
             } else {
                 // Fallback for single clip (should normally use initialStates now)
                 const changes: any = { start: newStart };
-                if (hoveredLayerId && hoveredLayerId !== clips.find(c => c.id === dragging.id)?.layerId) {
-                    changes.layerId = hoveredLayerId;
+                if (targetLayerId && targetLayerId !== clips.find(c => c.id === dragging.id)?.layerId) {
+                    changes.layerId = targetLayerId;
                 }
                 updateClip(dragging.id, changes);
             }
@@ -793,8 +1157,22 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                     </div>
                     <div className="w-px bg-[#333] h-6"></div>
                     <div className="flex gap-1">
-                        <button className="p-1.5 hover:bg-[#333] rounded text-slate-400 hover:text-white" onClick={splitClip} title="Split (S)">
+                        <button className="p-1.5 hover:bg-[#333] rounded text-slate-400 hover:text-white" onClick={splitClip} title="Split at Playhead (S)">
                             <Scissors size={16} />
+                        </button>
+                        <button 
+                            className="p-1.5 hover:bg-[#333] rounded text-slate-400 hover:text-red-500" 
+                            onClick={() => {
+                                if (selectedClipIds.size > 0) {
+                                    recordHistory();
+                                    setClips(prev => prev.filter(c => !selectedClipIds.has(c.id)));
+                                    setSelectedClipIds(new Set());
+                                    setSelectedClipId(null);
+                                }
+                            }}
+                            title="Delete Selected (Del)"
+                        >
+                            <Trash2 size={16} />
                         </button>
                         <button 
                             className="p-1.5 hover:bg-[#333] rounded text-slate-400 hover:text-white" 
@@ -877,6 +1255,70 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                         <div className="flex-1 overflow-y-auto p-3 space-y-3">
                             {activeSecondaryTab === 'media' && (
                                 <div className="space-y-4">
+                                    {/* Webcam Section */}
+                                    <section className="bg-[#2a2a2a] p-3 rounded-lg border border-[#333]">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                                                <Camera size={12} /> Webcam
+                                            </h4>
+                                            {isWebcamOpen && (
+                                                <button 
+                                                    onClick={stopWebcam}
+                                                    className="p-1 hover:bg-[#333] rounded text-slate-400 hover:text-white"
+                                                    title="Close Webcam"
+                                                >
+                                                    <X size={12} />
+                                                </button>
+                                            )}
+                                        </div>
+
+                                        {!isWebcamOpen ? (
+                                            <button 
+                                                onClick={startWebcam}
+                                                className="w-full py-6 border-2 border-dashed border-[#444] rounded-lg flex flex-col items-center gap-2 text-slate-500 hover:border-indigo-500 hover:text-indigo-400 transition group"
+                                            >
+                                                <Camera size={24} className="group-hover:scale-110 transition" />
+                                                <span className="text-xs font-medium">Open Webcam</span>
+                                            </button>
+                                        ) : (
+                                            <div className="space-y-2">
+                                                <div className="aspect-video bg-black rounded overflow-hidden relative border border-[#444]">
+                                                    <video 
+                                                        ref={webcamVideoRef} 
+                                                        autoPlay 
+                                                        muted 
+                                                        className="w-full h-full object-cover transform scale-x-[-1]" 
+                                                    />
+                                                    
+                                                    {isRecordingWebcam && (
+                                                        <div className="absolute top-2 right-2 bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 animate-pulse">
+                                                            <div className="w-2 h-2 bg-white rounded-full"></div>
+                                                            REC {formatTime(recordingTime)}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                                
+                                                <div className="flex gap-2">
+                                                    {!isRecordingWebcam ? (
+                                                        <button 
+                                                            onClick={startRecordingWebcam}
+                                                            className="flex-1 bg-red-600 hover:bg-red-500 text-white py-1.5 rounded text-xs font-bold flex items-center justify-center gap-2 transition"
+                                                        >
+                                                            <Circle size={10} fill="currentColor" /> Record
+                                                        </button>
+                                                    ) : (
+                                                        <button 
+                                                            onClick={stopRecordingWebcam}
+                                                            className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-1.5 rounded text-xs font-bold flex items-center justify-center gap-2 transition"
+                                                        >
+                                                            <Square size={10} fill="currentColor" /> Stop
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </section>
+
                                     {/* Highlights Section */}
                                     {highlights && highlights.length > 0 && (
                                         <section>
@@ -1027,15 +1469,97 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                             )}
 
                             {activeSecondaryTab === 'audio' && (
-                                <div className="text-center text-slate-500 text-sm mt-8">
-                                    <Music size={32} className="mx-auto mb-2 opacity-50"/>
-                                    <p className="mb-4 text-xs">No stock audio</p>
-                                    <button 
-                                        onClick={() => handleAddClip(layers.find(l=>l.type==='audio')?.id || 'l4', 'audio')} 
-                                        className="px-3 py-1.5 bg-[#2a2a2a] hover:bg-[#333] rounded text-[10px] font-bold border border-[#333] transition"
-                                    >
-                                        Add Empty Track
-                                    </button>
+                                <div className="p-4 text-center">
+                                    <div className="mb-4">
+                                        <input 
+                                            type="file" 
+                                            accept="audio/*"
+                                            className="hidden"
+                                            id="audio-upload"
+                                            onChange={(e) => {
+                                                const file = e.target.files?.[0];
+                                                if (!file) return;
+
+                                                // Create object URL for local preview
+                                                const url = URL.createObjectURL(file);
+                                                
+                                                // Create a temporary audio element to get duration
+                                                const audio = new Audio(url);
+                                                audio.onloadedmetadata = () => {
+                                                    const audioClip: Clip = {
+                                                        id: Math.random().toString(36).substr(2, 9),
+                                                        type: 'audio',
+                                                        src: url, // Local blob URL
+                                                        content: file.name,
+                                                        start: 0,
+                                                        duration: audio.duration || 10,
+                                                        offset: 0,
+                                                        layerId: layers.find(l => l.type === 'audio')?.id || 'l4',
+                                                        x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, volume: 1
+                                                    };
+                                                    
+                                                    // Upload file to backend for persistence (Optional but recommended)
+                                                    // For now we use local blob, but in real app we should upload
+                                                    // We can mock "upload" by just using the file object if we had a way to send it
+                                                    
+                                                    // Add to timeline
+                                                    recordHistory();
+                                                    setClips(prev => [...prev, audioClip]);
+                                                };
+                                            }}
+                                        />
+                                        <label 
+                                            htmlFor="audio-upload"
+                                            className="cursor-pointer block w-full border-2 border-dashed border-[#333] hover:border-indigo-500 rounded-lg p-6 transition group"
+                                        >
+                                            <Music size={32} className="mx-auto mb-2 text-slate-500 group-hover:text-indigo-400 transition" />
+                                            <span className="text-xs font-bold text-slate-400 group-hover:text-white block">Upload Audio</span>
+                                            <span className="text-[9px] text-slate-600 block mt-1">MP3, WAV, AAC</span>
+                                        </label>
+                                    </div>
+
+                                    <div className="text-left">
+                                        <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Project Audio</h4>
+                                        <div className="space-y-2">
+                                            {clips.filter(c => c.type === 'audio').map(clip => (
+                                                <div key={clip.id} className="bg-[#2a2a2a] p-2 rounded flex items-center justify-between group">
+                                                    <div className="flex items-center gap-2 overflow-hidden">
+                                                        <Music size={14} className="text-emerald-500 shrink-0" />
+                                                        <span className="text-[10px] truncate text-slate-300">{clip.content}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition">
+                                                        <button 
+                                                            onClick={() => {
+                                                                handleAddClip(layers.find(l=>l.type==='audio')?.id || 'l4', 'audio', undefined, {
+                                                                    src: clip.src,
+                                                                    content: clip.content,
+                                                                    duration: clip.duration
+                                                                });
+                                                            }}
+                                                            title="Add another instance"
+                                                            className="p-1 hover:bg-[#333] rounded text-slate-400 hover:text-white"
+                                                        >
+                                                            <Plus size={12} />
+                                                        </button>
+                                                        <button 
+                                                            onClick={() => {
+                                                                if (confirm('Delete this audio track?')) {
+                                                                    recordHistory();
+                                                                    setClips(prev => prev.filter(c => c.id !== clip.id));
+                                                                }
+                                                            }}
+                                                            className="p-1 hover:bg-red-900/50 rounded text-slate-400 hover:text-red-400"
+                                                        >
+                                                            <Trash2 size={12} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                            {clips.filter(c => c.type === 'audio').length === 0 && (
+                                                <p className="text-[10px] text-slate-600 italic text-center py-2">No audio tracks yet</p>
+                                            )}
+                                        </div>
+                                    </div>
                                 </div>
                             )}
 
@@ -1098,7 +1622,10 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                                                     ref={el => { if(el) mediaRefs.current[clip.id] = el; }}
                                                     src={clip.src}
                                                     className="w-full h-full object-contain pointer-events-none"
-                                                    muted
+                                                    onError={(e) => {
+                                                        console.error("Video load error:", clip.src, e.currentTarget.error);
+                                                        handleClipError(clip.id, clip.src);
+                                                    }}
                                                 />
                                             </div>
                                         );
@@ -1133,6 +1660,7 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                                                 ref={el => { if(el) mediaRefs.current[clip.id] = el; }}
                                                 src={clip.src}
                                                 className="hidden"
+                                                onError={(e) => console.error("Audio load error:", clip.src, e.currentTarget.error)}
                                             />
                                          );
                                     }
@@ -1490,14 +2018,14 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                             </button>
                         </div>
                         <div className="flex items-center gap-2">
-                            <button onClick={() => setTimelineZoom(z => Math.max(0.2, z - 0.2))} className="p-1 hover:bg-[#333] rounded"><ZoomOut size={14} /></button>
+                            <button onClick={() => setTimelineZoom(z => Math.max(0.001, z / 1.2))} className="p-1 hover:bg-[#333] rounded"><ZoomOut size={14} /></button>
                             <input 
-                                type="range" min="0.2" max="3" step="0.1" 
+                                type="range" min="0.001" max="100" step="0.001" 
                                 value={timelineZoom} 
                                 onChange={(e) => setTimelineZoom(parseFloat(e.target.value))}
-                                className="w-24 accent-indigo-500 h-1 bg-[#333] rounded appearance-none"
+                                className="w-full max-w-xs accent-indigo-500 h-1 bg-[#333] rounded appearance-none"
                             />
-                            <button onClick={() => setTimelineZoom(z => Math.min(3, z + 0.2))} className="p-1 hover:bg-[#333] rounded"><ZoomIn size={14} /></button>
+                            <button onClick={() => setTimelineZoom(z => Math.min(50, z * 1.2))} className="p-1 hover:bg-[#333] rounded"><ZoomIn size={14} /></button>
                         </div>
                     </div>
 
@@ -1510,24 +2038,23 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                         
                         {/* Ruler Container (Hidden Scroll) */}
                         <div className="flex-1 overflow-hidden relative" ref={rulerRef}>
+                            <canvas 
+                                ref={rulerCanvasRef}
+                                className="absolute inset-0 pointer-events-none z-10"
+                            />
                             {/* Ruler Content */}
                             <div 
-                                className="h-8 flex items-end text-[10px] text-slate-500 cursor-pointer relative"
+                                ref={rulerContentRef}
+                                className="h-8 flex items-end text-[10px] text-slate-500 cursor-pointer relative z-20"
                                 style={{ width: `${duration * PIXELS_PER_SECOND * timelineZoom}px` }}
                                 onMouseDown={(e) => {
-                                    const rect = e.currentTarget.getBoundingClientRect();
-                                    const x = e.clientX - rect.left;
+                                    const rulerRect = e.currentTarget.getBoundingClientRect();
+                                    const x = e.clientX - rulerRect.left + (timelineScrollRef.current?.scrollLeft || 0);
                                     const newTime = Math.max(0, x / (PIXELS_PER_SECOND * timelineZoom));
                                     setCurrentTime(newTime);
                                     setDragging({ id: 'playhead', type: 'scrub', startX: e.clientX, initialStart: newTime, initialDuration: 0, initialOffset: 0 });
                                 }}
                             >
-                                {Array.from({ length: Math.ceil(duration) }).map((_, i) => (
-                                    <div key={i} className="absolute bottom-0 border-l border-[#444] h-3 pl-1 pointer-events-none" style={{ left: i * PIXELS_PER_SECOND * timelineZoom }}>
-                                        {i % 5 === 0 && <span>{formatTime(i).split(':')[1]}:{formatTime(i).split(':')[2]}</span>}
-                                    </div>
-                                ))}
-                                
                                 {/* Playhead Indicator (Triangle) */}
                                 <div 
                                     className="absolute bottom-0 w-3 h-3 -ml-1.5 bg-red-500 rotate-45 transform translate-y-1.5 z-40 pointer-events-none"
@@ -1602,7 +2129,7 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                         >
                             <div className="min-w-full relative" style={{ width: `${duration * PIXELS_PER_SECOND * timelineZoom}px`, minHeight: '100%' }}>
                                 {/* Tracks */}
-                                <div className="flex flex-col">
+                                <div className="flex flex-col" ref={trackListRef}>
                                     {layers.map(layer => (
                                         <div 
                                             key={layer.id} 
@@ -1670,8 +2197,17 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                                                             });
                                                         }}
                                                     >
+                                                        {/* Waveform Visualization */}
+                                                        {(clip.type === 'video' || clip.type === 'audio') && clip.src && (
+                                                            <ClipWaveform 
+                                                                src={clip.src} 
+                                                                height={60} 
+                                                                color={clip.type === 'video' ? 'rgba(255,255,255,0.3)' : 'rgba(167, 243, 208, 0.4)'}
+                                                            />
+                                                        )}
+
                                                         {/* Label */}
-                                                        <div className="px-2 py-1 text-[10px] font-bold truncate text-white/90 drop-shadow-md pointer-events-none">
+                                                        <div className="px-2 py-1 text-[10px] font-bold truncate text-white/90 drop-shadow-md pointer-events-none relative z-10">
                                                             {clip.content || (clip.type === 'video' ? 'Video Clip' : 'Audio Clip')}
                                                         </div>
 
@@ -1735,61 +2271,107 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
             {/* Render Modal */}
             {renderModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-                    <div className="bg-[#1e1e1e] border border-[#333] rounded-lg shadow-2xl w-96 p-6">
+                    <div className="bg-[#1e1e1e] border border-[#333] rounded-lg shadow-2xl w-[480px] p-6">
                         <div className="flex items-center justify-between mb-6">
                             <h3 className="text-lg font-bold text-white flex items-center gap-2">
                                 <Video size={20} className="text-emerald-500" /> Render Video
                             </h3>
-                            <button onClick={() => setRenderModalOpen(false)} className="text-slate-500 hover:text-white">
+                            <button onClick={() => {
+                                setRenderModalOpen(false);
+                                // Reset if completed or failed so next time we start fresh, but if active keep running
+                                if (renderStatus === 'completed' || renderStatus === 'failed') {
+                                    setRenderJobId(null);
+                                    setRenderStatus('idle');
+                                }
+                            }} className="text-slate-500 hover:text-white">
                                 <X size={20} />
                             </button>
                         </div>
 
-                        <div className="space-y-4 mb-6">
-                            <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Resolution</label>
-                                <select 
-                                    value={renderResolution}
-                                    onChange={(e) => setRenderResolution(e.target.value)}
-                                    className="w-full bg-[#121212] border border-[#333] rounded p-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
-                                >
-                                    <option value="4k">4K Ultra HD (3840x2160)</option>
-                                    <option value="1440p">1440p Quad HD (2560x1440)</option>
-                                    <option value="1080p">1080p Full HD (1920x1080)</option>
-                                    <option value="720p">720p HD (1280x720)</option>
-                                    <option value="480p">480p SD (854x480)</option>
-                                </select>
-                            </div>
+                        {renderJobId ? (
+                            <div className="space-y-4">
+                                <div className="flex items-center justify-between text-xs text-slate-400 uppercase font-bold">
+                                    <span>Status: {renderStatus}</span>
+                                    <span>{renderProgress}%</span>
+                                </div>
+                                <div className="h-2 bg-[#333] rounded-full overflow-hidden">
+                                    <div 
+                                        className={`h-full transition-all duration-300 ${renderStatus === 'failed' ? 'bg-red-500' : 'bg-emerald-500'}`}
+                                        style={{ width: `${renderProgress}%` }}
+                                    ></div>
+                                </div>
+                                
+                                <div className="bg-[#121212] border border-[#333] rounded p-2 h-40 overflow-y-auto text-[10px] font-mono text-slate-400 space-y-1">
+                                    {renderLogs.map((log, i) => (
+                                        <div key={i}>{log}</div>
+                                    ))}
+                                    <div ref={el => el?.scrollIntoView({ behavior: 'smooth' })} />
+                                </div>
 
-                            <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Format</label>
-                                <select 
-                                    value={renderFormat}
-                                    onChange={(e) => setRenderFormat(e.target.value)}
-                                    className="w-full bg-[#121212] border border-[#333] rounded p-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
-                                >
-                                    <option value="mp4">MP4 (H.264)</option>
-                                    <option value="webm">WebM (VP9)</option>
-                                    <option value="mov">MOV (ProRes)</option>
-                                    <option value="gif">GIF (Animated)</option>
-                                </select>
+                                {renderStatus === 'completed' && (
+                                    <div className="flex justify-end pt-2">
+                                        <button 
+                                            onClick={() => {
+                                                setRenderModalOpen(false);
+                                                setRenderJobId(null);
+                                                setRenderStatus('idle');
+                                            }}
+                                            className="px-4 py-2 rounded text-sm font-bold bg-indigo-600 hover:bg-indigo-500 text-white"
+                                        >
+                                            Done
+                                        </button>
+                                    </div>
+                                )}
                             </div>
-                        </div>
+                        ) : (
+                            <>
+                                <div className="space-y-4 mb-6">
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Resolution</label>
+                                        <select 
+                                            value={renderResolution}
+                                            onChange={(e) => setRenderResolution(e.target.value)}
+                                            className="w-full bg-[#121212] border border-[#333] rounded p-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                                        >
+                                            <option value="4k">4K Ultra HD (3840x2160)</option>
+                                            <option value="1440p">1440p Quad HD (2560x1440)</option>
+                                            <option value="1080p">1080p Full HD (1920x1080)</option>
+                                            <option value="720p">720p HD (1280x720)</option>
+                                            <option value="480p">480p SD (854x480)</option>
+                                        </select>
+                                    </div>
 
-                        <div className="flex justify-end gap-3">
-                            <button 
-                                onClick={() => setRenderModalOpen(false)}
-                                className="px-4 py-2 rounded text-sm font-medium text-slate-400 hover:text-white hover:bg-[#333]"
-                            >
-                                Cancel
-                            </button>
-                            <button 
-                                onClick={handleRender}
-                                className="px-4 py-2 rounded text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/20"
-                            >
-                                Start Render
-                            </button>
-                        </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-400 uppercase mb-2">Format</label>
+                                        <select 
+                                            value={renderFormat}
+                                            onChange={(e) => setRenderFormat(e.target.value)}
+                                            className="w-full bg-[#121212] border border-[#333] rounded p-2 text-sm text-white focus:border-emerald-500 focus:outline-none"
+                                        >
+                                            <option value="mp4">MP4 (H.264)</option>
+                                            <option value="webm">WebM (VP9)</option>
+                                            <option value="mov">MOV (ProRes)</option>
+                                            <option value="gif">GIF (Animated)</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div className="flex justify-end gap-3">
+                                    <button 
+                                        onClick={() => setRenderModalOpen(false)}
+                                        className="px-4 py-2 rounded text-sm font-medium text-slate-400 hover:text-white hover:bg-[#333]"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button 
+                                        onClick={handleRender}
+                                        className="px-4 py-2 rounded text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-900/20"
+                                    >
+                                        Start Render
+                                    </button>
+                                </div>
+                            </>
+                        )}
                     </div>
                 </div>
             )}

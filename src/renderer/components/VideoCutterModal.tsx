@@ -21,6 +21,8 @@ export const VideoCutterModal = ({ video, onClose, onSave }: VideoCutterModalPro
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
+    const [videoSrc, setVideoSrc] = useState('');
+    const [retryAttempted, setRetryAttempted] = useState(false);
     
     // Current segment being edited
     const [startTime, setStartTime] = useState(0);
@@ -30,11 +32,42 @@ export const VideoCutterModal = ({ video, onClose, onSave }: VideoCutterModalPro
     // List of added segments
     const [segments, setSegments] = useState<Array<{ start_time: number; end_time: number; title: string; id: string }>>([]);
 
+    // Helper to get video source URL
+    const getVideoSrc = (video: any) => {
+        if (!video) return '';
+        if (video.filepath && (video.filepath.includes('/') || video.filepath.includes('\\'))) {
+            const filename = video.filepath.split(/[\\/]/).pop();
+            const dir = video.filepath.includes('processed') ? 'processed' : 'downloads';
+            return `${BASE_URL}/${dir}/${filename}`;
+        }
+        return video.url;
+    };
+
     useEffect(() => {
         if (videoRef.current) {
             setDuration(videoRef.current.duration || 0);
         }
     }, [videoRef.current]);
+
+    useEffect(() => {
+        if (video) {
+            setVideoSrc(getVideoSrc(video));
+            setRetryAttempted(false);
+        }
+    }, [video?.id, video?.filepath]);
+
+    const handleVideoError = () => {
+        console.log("Video load error, retrying...", videoSrc);
+        if (retryAttempted) return;
+        
+        if (videoSrc.includes('/processed/')) {
+            setVideoSrc(videoSrc.replace('/processed/', '/downloads/'));
+            setRetryAttempted(true);
+        } else if (videoSrc.includes('/downloads/')) {
+            setVideoSrc(videoSrc.replace('/downloads/', '/processed/'));
+            setRetryAttempted(true);
+        }
+    };
 
     const handleTimeUpdate = () => {
         if (videoRef.current) {
@@ -111,15 +144,7 @@ export const VideoCutterModal = ({ video, onClose, onSave }: VideoCutterModalPro
         onSave(segments.map(({ id, ...rest }) => rest));
     };
 
-    // Helper to get video source URL (reused from VideoDetailsModal)
-    const getVideoSrc = (video: any) => {
-        if (!video) return '';
-        if (video.filepath && (video.filepath.includes('/') || video.filepath.includes('\\'))) {
-            const filename = video.filepath.split(/[\\/]/).pop();
-            return `${BASE_URL}/downloads/${filename}`;
-        }
-        return video.url;
-    };
+
 
     return (
         <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4 backdrop-blur-sm">
@@ -143,11 +168,12 @@ export const VideoCutterModal = ({ video, onClose, onSave }: VideoCutterModalPro
                         <div className="aspect-video bg-black rounded-xl overflow-hidden mb-6 relative group shadow-lg border border-slate-800 shrink-0">
                             <video 
                                 ref={videoRef}
-                                src={getVideoSrc(video)}
+                                src={videoSrc}
                                 className="w-full h-full object-contain"
                                 onTimeUpdate={handleTimeUpdate}
                                 onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
                                 onClick={togglePlay}
+                                onError={handleVideoError}
                             />
                             <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur px-4 py-2 rounded-full text-white font-mono text-sm opacity-0 group-hover:opacity-100 transition">
                                 {formatTime(currentTime)} / {formatTime(duration)}

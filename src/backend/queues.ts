@@ -6,3 +6,4 @@ export const analyzeQueue = createQueue('analyze');
 export const uploadQueue = createQueue('upload');
 export const autoQueue = createQueue('auto');
 export const renderQueue = createQueue('render');
+export const magicQueue = createQueue('magic');

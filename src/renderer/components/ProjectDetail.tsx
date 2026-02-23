@@ -93,7 +93,7 @@ export const ProjectDetail = ({ project: initialProject, onBack, onOpenEditor }:
     const [selectedVideoDetails, setSelectedVideoDetails] = useState<string | null>(null);
     const [cuttingVideoId, setCuttingVideoId] = useState<string | null>(null);
     const [libraryVideos, setLibraryVideos] = useState<any[]>([]);
-    const [playingClip, setPlayingClip] = useState<{ url: string, title: string } | null>(null);
+    const [playingClip, setPlayingClip] = useState<{ url: string, title: string, retried?: boolean } | null>(null);
 
     // Metadata State
     const [metadataResult, setMetadataResult] = useState<{ videoId: string, data: any } | null>(null);
@@ -540,7 +540,8 @@ export const ProjectDetail = ({ project: initialProject, onBack, onOpenEditor }:
         if (!filepath) return '';
         // extract filename from path (win or unix)
         const filename = filepath.split(/[\\/]/).pop();
-        return `${BASE_URL}/processed/${filename}`;
+        const dir = filepath.includes('processed') ? 'processed' : 'downloads';
+        return `${BASE_URL}/${dir}/${filename}`;
     };
 
     const toggleClipSelection = (clipId: string) => {
@@ -552,7 +553,30 @@ export const ProjectDetail = ({ project: initialProject, onBack, onOpenEditor }:
         });
     };
 
+    const handleClipPlayerError = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
+        if (!playingClip) return;
+        console.log("Clip player error, retrying path...", playingClip.url);
+        
+        if (playingClip.retried) {
+             console.warn("Clip failed to load after retry.");
+             return;
+        }
 
+        let newUrl = playingClip.url;
+        if (playingClip.url.includes('/processed/')) {
+            newUrl = playingClip.url.replace('/processed/', '/downloads/');
+        } else if (playingClip.url.includes('/downloads/')) {
+            newUrl = playingClip.url.replace('/downloads/', '/processed/');
+        } else {
+            return;
+        }
+
+        setPlayingClip({ 
+            ...playingClip, 
+            url: newUrl,
+            retried: true
+        });
+    };
 
     return (
         <div className="flex flex-col h-full bg-slate-900">
@@ -870,6 +894,7 @@ export const ProjectDetail = ({ project: initialProject, onBack, onOpenEditor }:
                                     controls
                                     autoPlay
                                     className="w-full h-full"
+                                    onError={handleClipPlayerError}
                                 />
                             </div>
                         </div>

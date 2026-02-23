@@ -16,6 +16,7 @@ import settingsRoutes from './routes/settings';
 import autoRoutes from './routes/auto';
 import editorRoutes from './routes/editor';
 import webhookRoutes from './routes/webhook';
+import magicRoutes from './routes/magic';
 
 const fastify = Fastify({ logger: true });
 
@@ -45,6 +46,7 @@ fastify.register(settingsRoutes, { prefix: '/api' });
 fastify.register(autoRoutes, { prefix: '/api/auto' });
 fastify.register(editorRoutes, { prefix: '/api' });
 fastify.register(webhookRoutes, { prefix: '/api' });
+fastify.register(magicRoutes, { prefix: '/api' });
 
 // Serve Assets Directory (Vite build output)
 fastify.register(fastifyStatic, {

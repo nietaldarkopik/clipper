@@ -191,6 +191,25 @@ export default async function videoRoutes(fastify: FastifyInstance) {
             return reply.code(400).send({ error: 'Video ID is required' });
         }
 
+        // Validate if file exists before queuing
+        const downloadsDir = path.join(process.cwd(), 'downloads');
+        try {
+            const files = await fs.readdir(downloadsDir);
+            const fileExists = files.some(f => f.startsWith(id) && (f.endsWith('.mp4') || f.endsWith('.webm') || f.endsWith('.mkv')));
+            
+            if (!fileExists) {
+                console.warn(`[API] Analysis request for missing file: ${id}`);
+                // Optional: Check if it was a failed download
+                const video = getVideo(id);
+                if (video && video.status === 'failed') {
+                    return reply.code(400).send({ error: 'Video download failed previously. Please retry download first.' });
+                }
+                return reply.code(404).send({ error: 'Video file not found. Please ensure download is complete.' });
+            }
+        } catch (err) {
+            console.error('[API] Failed to check downloads directory', err);
+        }
+
         try {
             const job = await analyzeQueue.add('analyze-video', { id, modelSize, method });
             console.log(`[API] Analysis job queued: jobId=${job.id}`);
@@ -306,7 +325,18 @@ export default async function videoRoutes(fastify: FastifyInstance) {
         const progress = job.progress;
         const data = job.data;
         const error = (job as any).failedReason;
+        
+        // Get logs if available (limit to last 100 lines to avoid payload issues)
+        let logs: string[] = [];
+        try {
+            const queueLogs = await (job as any).getLogs();
+            if (queueLogs && queueLogs.logs) {
+                logs = queueLogs.logs;
+            }
+        } catch (e) {
+            console.warn(`Failed to fetch logs for job ${jobId}`, e);
+        }
 
-        return { id: jobId, state, progress, result, data, error };
+        return { id: jobId, state, progress, result, data, error, logs };
     });
 }

@@ -100,9 +100,15 @@ export default async function aiRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/ai/generate-highlights', async (request, reply) => {
-      const { transcript } = request.body as { transcript: string };
+      console.log('[API] /ai/generate-highlights body:', JSON.stringify(request.body, null, 2));
+      const body = request.body as any;
+      const transcript = body?.transcript || body?.text || body?.content;
+      
       if (!transcript) {
-          return reply.code(400).send({ error: 'Transcript is required' });
+          return reply.code(400).send({ 
+            error: 'Transcript is required',
+            received: body
+          });
       }
       try {
           const aiService = getAIService();

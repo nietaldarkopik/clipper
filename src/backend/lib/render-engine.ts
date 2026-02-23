@@ -1,4 +1,10 @@
 import ffmpeg from 'fluent-ffmpeg';
+import ffmpegPath from 'ffmpeg-static';
+
+// Ensure ffmpeg path is set
+if (ffmpegPath) {
+    ffmpeg.setFfmpegPath(ffmpegPath);
+}
 
 interface Clip {
     id: string;
@@ -42,6 +48,7 @@ interface RenderOptions {
     height: number;
     fps: number;
     outputPath: string;
+    onProgress?: (msg: string) => void;
 }
 
 export const renderProjectVideo = async (
@@ -51,17 +58,17 @@ export const renderProjectVideo = async (
     options: RenderOptions
 ) => {
     return new Promise((resolve, reject) => {
-        const { width, height, fps, outputPath } = options;
+        const { width, height, fps, outputPath, onProgress } = options;
         
         const cmd = ffmpeg();
         
         // 0. Base Video (Black Background)
         cmd.input(`color=c=black:s=${width}x${height}:d=${duration}:r=${fps}`)
-           .inputFormat('lavfi');
+           .inputOptions(['-f:v', 'lavfi']);
            
         // 1. Base Audio (Silence) - used for duration and base
         cmd.input(`anullsrc=channel_layout=stereo:sample_rate=44100:d=${duration}`)
-           .inputFormat('lavfi');
+           .inputOptions(['-f:a', 'lavfi']);
 
         const visibleLayerIds = new Set(layers.filter(l => l.visible).map(l => l.id));
         const mutedLayerIds = new Set(layers.filter(l => l.muted).map(l => l.id));
@@ -290,7 +297,13 @@ export const renderProjectVideo = async (
         }
 
         cmd.output(outputPath)
-           .on('start', (c) => console.log('Render started:', c))
+           .on('start', (c) => {
+                console.log('Render started:', c);
+                if (onProgress) onProgress(`FFmpeg started: ${c}`);
+           })
+           .on('progress', (p) => {
+                if (onProgress && p.percent) onProgress(`Rendering: ${Math.round(p.percent)}%`);
+           })
            .on('end', () => resolve(outputPath))
            .on('error', (err) => reject(err))
            .run();

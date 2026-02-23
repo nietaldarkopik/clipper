@@ -21,6 +21,8 @@ export const VideoDetailsModal = ({ videoId, onClose }: VideoDetailsModalProps) 
     const [analyzing, setAnalyzing] = useState(false);
     const [activeTab, setActiveTab] = useState<'info' | 'transcripts' | 'highlights'>('info');
     const [isPlaying, setIsPlaying] = useState(false);
+    const [videoSrc, setVideoSrc] = useState('');
+    const [retryAttempted, setRetryAttempted] = useState(false);
 
     const fetchData = async () => {
         try {
@@ -64,12 +66,31 @@ export const VideoDetailsModal = ({ videoId, onClose }: VideoDetailsModalProps) 
         // If it's a local file path, convert to server URL
         if (video.filepath && (video.filepath.includes('/') || video.filepath.includes('\\'))) {
             const filename = video.filepath.split(/[\\/]/).pop();
-            // Assuming served under /downloads/ if it's a downloaded file
-            // We might need a more robust way to map paths to URLs if we have multiple static roots
-            // For now, we assume all local files are in downloads
-            return `${BASE_URL}/downloads/${filename}`;
+            // Check if it's in processed or downloads
+            const dir = video.filepath.includes('processed') ? 'processed' : 'downloads';
+            return `${BASE_URL}/${dir}/${filename}`;
         }
         return video.url;
+    };
+
+    useEffect(() => {
+        if (video) {
+            setVideoSrc(getVideoSrc(video));
+            setRetryAttempted(false);
+        }
+    }, [video?.id, video?.filepath]);
+
+    const handleVideoError = () => {
+        console.log("Video load error, retrying...", videoSrc);
+        if (retryAttempted) return;
+        
+        if (videoSrc.includes('/processed/')) {
+            setVideoSrc(videoSrc.replace('/processed/', '/downloads/'));
+            setRetryAttempted(true);
+        } else if (videoSrc.includes('/downloads/')) {
+            setVideoSrc(videoSrc.replace('/downloads/', '/processed/'));
+            setRetryAttempted(true);
+        }
     };
 
     return (
@@ -124,10 +145,11 @@ export const VideoDetailsModal = ({ videoId, onClose }: VideoDetailsModalProps) 
                                     <div className="aspect-video bg-black rounded-xl overflow-hidden mb-6 relative group">
                                         {isPlaying ? (
                                             <video 
-                                                src={getVideoSrc(video)} 
+                                                src={videoSrc} 
                                                 controls 
                                                 autoPlay 
                                                 className="w-full h-full object-contain"
+                                                onError={handleVideoError}
                                             />
                                         ) : (
                                             <>

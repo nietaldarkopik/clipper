@@ -86,7 +86,8 @@ export class OllamaService implements AIService {
             console.log(`[Ollama] Sending request to ${url} with model ${this.modelName}`);
             
             const response = await axios.post(url, payload, {
-                responseType: 'stream'
+                responseType: 'stream',
+                timeout: 300000 // 5 minutes timeout
             });
             
             return new Promise((resolve, reject) => {
@@ -172,6 +173,7 @@ export class OllamaService implements AIService {
     }
 
     async getHighlightsFromTranscript(transcript: string): Promise<any[]> {
+        console.log(`[Ollama] Generating highlights for transcript length: ${transcript.length}`);
         const prompt = `
           Analyze the following video transcript and identify 3-5 most viral/engaging segments (highlights).
           Transcript: "${transcript.substring(0, 15000)}" 
@@ -497,7 +499,10 @@ export class OpenAIService implements AIService {
   private fs = require('fs');
 
   constructor(apiKey: string) {
-    this.client = new OpenAI({ apiKey });
+    this.client = new OpenAI({ 
+        apiKey,
+        timeout: 300000 // 5 minutes timeout
+    });
   }
 
   async transcribeAudio(filePath: string, _modelSize?: string, _onProgress?: (progress: number) => void, _onPartial?: (text: string) => void): Promise<any> {
@@ -577,6 +582,7 @@ export class OpenAIService implements AIService {
   }
 
     async getHighlightsFromTranscript(transcript: string): Promise<any[]> {
+    console.log(`[OpenAI] Generating highlights for transcript length: ${transcript.length}`);
     // If transcript is very long, we might need to truncate or chunk it.
     // We assume transcript has timestamps if possible, but here we just have text.
     // Ideally we should pass segments. But for now let's ask for estimated timestamps.
