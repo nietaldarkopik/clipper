@@ -335,9 +335,12 @@ export default async function videoRoutes(fastify: FastifyInstance) {
         // Get logs if available (limit to last 100 lines to avoid payload issues)
         let logs: string[] = [];
         try {
-            const queueLogs = await (job as any).getLogs();
-            if (queueLogs && queueLogs.logs) {
-                logs = queueLogs.logs;
+            const jobAny = job as any;
+            if (typeof jobAny.getLogs === 'function') {
+                const queueLogs = await jobAny.getLogs();
+                if (queueLogs && queueLogs.logs) {
+                    logs = queueLogs.logs;
+                }
             }
         } catch (e) {
             console.warn(`Failed to fetch logs for job ${jobId}`, e);

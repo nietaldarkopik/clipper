@@ -270,15 +270,42 @@ export const startWorkers = () => {
     const { id, startTime, duration } = job.data;
     console.log(`[Process] Clipping ${id} from ${startTime} for ${duration}s`);
 
-    const files = await fs.readdir(downloadsDir);
-    // Find video file (mp4, webm, mkv) and avoid .info.json or .json or .wav
-    const file = files.find(f => f.startsWith(id) && (f.endsWith('.mp4') || f.endsWith('.webm') || f.endsWith('.mkv')));
+    let inputPath: string | null = null;
 
-    if (!file) {
-      throw new Error('File not found');
+    // 1. Prefer filepath dari DB (video sudah dipindah ke processedDir)
+    try {
+      const videoRecord = getVideo(id) as any;
+      if (videoRecord && videoRecord.filepath) {
+        const candidatePath = videoRecord.filepath;
+        if (await fs.pathExists(candidatePath)) {
+          inputPath = candidatePath;
+        }
+      }
+    } catch (e) {
+      console.warn(`[Process] Failed to read video record for ${id}`, e);
     }
 
-    const inputPath = path.join(downloadsDir, file);
+    // 2. Fallback: cek langsung di processedDir
+    if (!inputPath) {
+      const processedCandidate = path.join(processedDir, `${id}.mp4`);
+      if (await fs.pathExists(processedCandidate)) {
+        inputPath = processedCandidate;
+      }
+    }
+
+    // 3. Fallback legacy: cari di downloadsDir (untuk kasus lama)
+    if (!inputPath) {
+      const files = await fs.readdir(downloadsDir);
+      const file = files.find(f => f.startsWith(id) && (f.endsWith('.mp4') || f.endsWith('.webm') || f.endsWith('.mkv')));
+      if (file) {
+        inputPath = path.join(downloadsDir, file);
+      }
+    }
+
+    if (!inputPath) {
+      throw new Error(`File not found for video ${id}`);
+    }
+
     const outputPath = path.join(processedDir, `${id}_clip_${startTime}.mp4`);
 
     return new Promise((resolve, reject) => {
@@ -797,4 +824,3 @@ export const startWorkers = () => {
     console.error(`[Magic] Job ${job?.id} failed with ${err.message}`);
   });
 }
-
