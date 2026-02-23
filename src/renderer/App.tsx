@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Scissors,
   Play,
@@ -35,7 +35,11 @@ import {
   Info,
   RefreshCw,
   Square,
-  Film
+  Film,
+  Globe,
+  ArrowLeft,
+  ArrowRight,
+  X
 } from 'lucide-react';
 import { api, downloadVideo, analyzeVideo, getJobStatus, getTrendingVideos, searchVideos, generateAIMetadata, uploadVideo, getChannels, addChannel, deleteChannel, getChannelVideos, cancelDownload, retryDownload } from './api';
 import { VideoDetailsModal } from './VideoDetailsModal';
@@ -43,6 +47,18 @@ import { ProjectsTab } from './components/ProjectsTab';
 import { SettingsTab } from './components/SettingsTab';
 import { Recorder } from './components/Recorder';
 import { VideoEditor } from './components/VideoEditor/VideoEditor';
+import { AutoShortsTab } from './components/AutoShortsTab';
+
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      webview: React.DetailedHTMLProps<React.HTMLAttributes<HTMLDivElement>, HTMLDivElement> & {
+        src?: string;
+        allowpopups?: string;
+      };
+    }
+  }
+}
 
 const formatTime = (seconds: number) => {
   if (!seconds || isNaN(seconds)) return '00:00';
@@ -591,6 +607,12 @@ const App = () => {
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [currentProjectClips, setCurrentProjectClips] = useState<any[]>([]);
 
+  const [quickDownloadUrl, setQuickDownloadUrl] = useState<string | null>(null);
+  const [quickDownloadOpen, setQuickDownloadOpen] = useState(false);
+  const [quickDownloadProjects, setQuickDownloadProjects] = useState<any[]>([]);
+  const [quickDownloadSelectedProjectId, setQuickDownloadSelectedProjectId] = useState<string | null>(null);
+  const [quickDownloadLoading, setQuickDownloadLoading] = useState(false);
+
   // Research Tab State
   const [researchPage, setResearchPage] = useState(1);
   const [researchLimit, setResearchLimit] = useState(6);
@@ -645,6 +667,7 @@ const App = () => {
 
   // Mock Data untuk Library & History
   const [processingList, setProcessingList] = useState<Array<{ id: string, name: string, progress: number, status: string, queueName: string }>>([]);
+  const processingListRef = useRef<Array<{ id: string, name: string, progress: number, status: string, queueName: string }>>([]);
 
   useEffect(() => {
     if (activeTab !== 'library') return;
@@ -733,16 +756,21 @@ const App = () => {
   };
 
   useEffect(() => {
-    const interval = setInterval(async () => {
-      if (processingList.length === 0) return;
+    processingListRef.current = processingList;
+  }, [processingList]);
 
-      const updates = await Promise.all(processingList.map(async (item) => {
-        if (['completed', 'failed'].includes(item.status.toLowerCase())) return item;
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const currentList = processingListRef.current;
+      if (!currentList || currentList.length === 0) return;
+
+      const updates = await Promise.all(currentList.map(async (item) => {
+        if (!item || !item.status) return item;
+        if (['completed', 'failed'].includes(String(item.status).toLowerCase())) return item;
         try {
           const status = await getJobStatus(item.queueName as any, item.id);
 
-          // Auto-detect file path from completed jobs
-          if (status.state === 'completed' && status.result) {
+          if (status && status.state === 'completed' && status.result) {
             if (item.queueName === 'download' && status.result.filePath) {
               setCurrentFilePath(status.result.filePath);
             } else if (item.queueName === 'process' && status.result.path) {
@@ -754,20 +782,22 @@ const App = () => {
 
           return {
             ...item,
-            status: status.state,
-            progress: status.state === 'completed' ? 100 : (status.progress || item.progress)
+            status: status?.state ?? item.status,
+            progress: status?.state === 'completed'
+              ? 100
+              : (status?.progress ?? item.progress)
           };
         } catch (e) {
           return item;
         }
       }));
 
-      if (JSON.stringify(updates) !== JSON.stringify(processingList)) {
+      if (JSON.stringify(updates) !== JSON.stringify(currentList)) {
         setProcessingList(updates);
       }
     }, 2000);
     return () => clearInterval(interval);
-  }, [processingList]);
+  }, []);
 
   const handleUpload = async () => {
     // Mock path if none exists for testing
@@ -787,12 +817,11 @@ const App = () => {
     }
   };
 
-  const handleDownload = async (url?: string) => {
-    const targetUrl = typeof url === 'string' ? url : searchUrl;
+  const handleStartDownload = async (targetUrl: string, projectId?: string) => {
     if (!targetUrl) return;
     setIsDownloading(true);
     try {
-      const res = await downloadVideo(targetUrl);
+      const res = await downloadVideo(targetUrl, projectId);
       setCurrentJobId(res.jobId);
       setProcessingList(prev => [...prev, { id: res.jobId, name: `Downloading ${targetUrl.slice(0, 20)}...`, progress: 0, status: 'waiting', queueName: 'download' }]);
       // alert(`Download started! Job ID: ${res.jobId}`);
@@ -802,6 +831,12 @@ const App = () => {
     } finally {
       setIsDownloading(false);
     }
+  };
+
+  const handleDownload = async (url?: string) => {
+    const targetUrl = typeof url === 'string' ? url : searchUrl;
+    if (!targetUrl) return;
+    await handleStartDownload(targetUrl);
   };
 
   const handleAIAnalyze = async () => {
@@ -823,6 +858,34 @@ const App = () => {
     } finally {
       setIsProcessingAI(false);
     }
+  };
+
+  const openQuickDownload = async (url: string) => {
+    if (!url) return;
+    setQuickDownloadUrl(url);
+    setQuickDownloadOpen(true);
+    setQuickDownloadLoading(true);
+    try {
+      const res = await api.get('/projects');
+      const data = Array.isArray(res.data) ? res.data : (res.data?.projects || []);
+      setQuickDownloadProjects(data);
+      if (data.length > 0) {
+        setQuickDownloadSelectedProjectId(data[0].id);
+      } else {
+        setQuickDownloadSelectedProjectId(null);
+      }
+    } catch (e) {
+      alert('Gagal memuat daftar project');
+    } finally {
+      setQuickDownloadLoading(false);
+    }
+  };
+
+  const confirmQuickDownload = async () => {
+    if (!quickDownloadUrl) return;
+    setQuickDownloadOpen(false);
+    await handleStartDownload(quickDownloadUrl, quickDownloadSelectedProjectId || undefined);
+    setQuickDownloadUrl(null);
   };
 
   const handleAIGenerate = async () => {
@@ -906,7 +969,408 @@ const App = () => {
     effect: 'outline'
   });
 
+  const BrowserTab = () => {
+    const [browserUrl, setBrowserUrl] = useState('https://www.youtube.com');
+    const [currentUrl, setCurrentUrl] = useState('https://www.youtube.com');
+    const [browserTabs, setBrowserTabs] = useState<{ id: number; title: string; url: string }[]>([
+      { id: 1, title: 'YouTube', url: 'https://www.youtube.com' }
+    ]);
+    const [activeBrowserTabId, setActiveBrowserTabId] = useState(1);
+    const [isPageLoading, setIsPageLoading] = useState(false);
+    const [canGoBack, setCanGoBack] = useState(false);
+    const [canGoForward, setCanGoForward] = useState(false);
+    const [showProjectModal, setShowProjectModal] = useState(false);
+    const [projects, setProjects] = useState<any[]>([]);
+    const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+    const [isLoadingProjects, setIsLoadingProjects] = useState(false);
+    const webviewRef = useRef<any>(null);
+    const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
+    const isElectron = typeof window !== 'undefined' && (window as any).process && (window as any).process.versions && (window as any).process.versions.electron;
+
+    const isSocialUrl = useMemo(() => {
+      if (!currentUrl) return false;
+      const url = currentUrl.toLowerCase();
+      return url.includes('youtube.com') || url.includes('youtu.be') || url.includes('tiktok.com') || url.includes('instagram.com') || url.includes('twitter.com') || url.includes('x.com') || url.includes('facebook.com');
+    }, [currentUrl]);
+
+    useEffect(() => {
+      const target = browserUrl || 'https://www.youtube.com';
+      setBrowserUrl(target);
+      setCurrentUrl(target);
+      setBrowserTabs(prev => prev.map(tab => tab.id === activeBrowserTabId ? { ...tab, url: target } : tab));
+      if (isElectron && webviewRef.current) {
+        webviewRef.current.src = target;
+      } else if (iframeRef.current) {
+        iframeRef.current.src = target;
+      }
+    }, []);
+
+    useEffect(() => {
+      if (!isElectron || !webviewRef.current) return;
+      const view = webviewRef.current as any;
+
+      const handleDidNavigate = (event: any) => {
+        if (event && event.url) {
+          const url = event.url;
+          setCurrentUrl(url);
+          setBrowserTabs(prev =>
+            prev.map(tab =>
+              tab.id === activeBrowserTabId ? { ...tab, url } : tab
+            )
+          );
+          setBrowserUrl(url);
+        }
+      };
+
+      const handleDidNavigateInPage = (event: any) => {
+        if (event && event.url) {
+          const url = event.url;
+          setCurrentUrl(url);
+          setBrowserTabs(prev =>
+            prev.map(tab =>
+              tab.id === activeBrowserTabId ? { ...tab, url } : tab
+            )
+          );
+          setBrowserUrl(url);
+        }
+      };
+
+      const handleDidStartLoading = () => {
+        setIsPageLoading(true);
+      };
+
+      const handleDidStopLoading = () => {
+        setIsPageLoading(false);
+        try {
+          setCanGoBack(typeof view.canGoBack === 'function' ? view.canGoBack() : false);
+          setCanGoForward(typeof view.canGoForward === 'function' ? view.canGoForward() : false);
+        } catch {
+          setCanGoBack(false);
+          setCanGoForward(false);
+        }
+      };
+
+      view.addEventListener('did-navigate', handleDidNavigate);
+      view.addEventListener('did-navigate-in-page', handleDidNavigateInPage);
+      view.addEventListener('did-start-loading', handleDidStartLoading);
+      view.addEventListener('did-stop-loading', handleDidStopLoading);
+
+      return () => {
+        view.removeEventListener('did-navigate', handleDidNavigate);
+        view.removeEventListener('did-navigate-in-page', handleDidNavigateInPage);
+        view.removeEventListener('did-start-loading', handleDidStartLoading);
+        view.removeEventListener('did-stop-loading', handleDidStopLoading);
+      };
+    }, [isElectron, activeBrowserTabId]);
+    
+    const normalizeUrl = (target: string) => {
+      if (!target) return '';
+      let finalUrl = target.trim();
+      if ((finalUrl.startsWith('`') && finalUrl.endsWith('`')) ||
+          (finalUrl.startsWith('"') && finalUrl.endsWith('"')) ||
+          (finalUrl.startsWith("'") && finalUrl.endsWith("'"))) {
+        finalUrl = finalUrl.slice(1, -1).trim();
+      }
+      finalUrl = finalUrl.replace(/^['"`]+/, '').replace(/['"`]+$/, '').trim();
+      const spaceIndex = finalUrl.indexOf(' ');
+      if (spaceIndex > 0) {
+        finalUrl = finalUrl.slice(0, spaceIndex);
+      }
+      if (!/^https?:\/\//i.test(finalUrl)) {
+        finalUrl = 'https://' + finalUrl;
+      }
+      return finalUrl;
+    };
+
+    const handleNavigate = (target: string) => {
+      const finalUrl = normalizeUrl(target);
+      if (!finalUrl) return;
+      setBrowserUrl(finalUrl);
+      setCurrentUrl(finalUrl);
+      setBrowserTabs(prev =>
+        prev.map(tab =>
+          tab.id === activeBrowserTabId ? { ...tab, url: finalUrl } : tab
+        )
+      );
+      if (isElectron && webviewRef.current) {
+        webviewRef.current.src = finalUrl;
+      } else if (iframeRef.current) {
+        iframeRef.current.src = finalUrl;
+      }
+    };
+
+    const handleBack = () => {
+      if (!isElectron || !webviewRef.current) return;
+      try {
+        if (webviewRef.current.canGoBack()) {
+          webviewRef.current.goBack();
+        }
+      } catch {}
+    };
+
+    const handleForward = () => {
+      if (!isElectron || !webviewRef.current) return;
+      try {
+        if (webviewRef.current.canGoForward()) {
+          webviewRef.current.goForward();
+        }
+      } catch {}
+    };
+
+    const handleReload = () => {
+      if (isElectron && webviewRef.current) {
+        try {
+          webviewRef.current.reload();
+        } catch {}
+      } else if (iframeRef.current) {
+        iframeRef.current.src = iframeRef.current.src;
+      }
+    };
+
+    const handleOpenProjectModal = async () => {
+      if (!currentUrl) return;
+      setIsLoadingProjects(true);
+      try {
+        const res = await api.get('/projects');
+        const data = Array.isArray(res.data) ? res.data : (res.data?.projects || []);
+        setProjects(data);
+        setShowProjectModal(true);
+        if (data.length > 0) {
+          setSelectedProjectId(data[0].id);
+        } else {
+          setSelectedProjectId(null);
+        }
+      } catch (e) {
+        alert('Gagal memuat daftar project');
+      } finally {
+        setIsLoadingProjects(false);
+      }
+    };
+
+    const handleConfirmDownload = async () => {
+      if (!currentUrl) return;
+      setShowProjectModal(false);
+      await handleStartDownload(currentUrl, selectedProjectId || undefined);
+    };
+
+    const handleSwitchBrowserTab = (id: number) => {
+      setActiveBrowserTabId(id);
+      const target = browserTabs.find(tab => tab.id === id);
+      if (!target) return;
+      setBrowserUrl(target.url);
+      setCurrentUrl(target.url);
+      if (isElectron && webviewRef.current) {
+        webviewRef.current.src = target.url;
+      } else if (iframeRef.current) {
+        iframeRef.current.src = target.url;
+      }
+    };
+
+    const handleNewBrowserTab = () => {
+      const nextId = browserTabs.length ? Math.max(...browserTabs.map(t => t.id)) + 1 : 1;
+      const url = 'https://www.google.com';
+      const nextTabs = [...browserTabs, { id: nextId, title: 'New Tab', url }];
+      setBrowserTabs(nextTabs);
+      setActiveBrowserTabId(nextId);
+      setBrowserUrl(url);
+      setCurrentUrl(url);
+      if (isElectron && webviewRef.current) {
+        webviewRef.current.src = url;
+      } else if (iframeRef.current) {
+        iframeRef.current.src = url;
+      }
+    };
+
+    const handleCloseBrowserTab = (id: number) => {
+      if (browserTabs.length === 1) return;
+      const filtered = browserTabs.filter(tab => tab.id !== id);
+      setBrowserTabs(filtered);
+      if (activeBrowserTabId === id) {
+        const next = filtered[filtered.length - 1];
+        setActiveBrowserTabId(next.id);
+        setBrowserUrl(next.url);
+        setCurrentUrl(next.url);
+        if (isElectron && webviewRef.current) {
+          webviewRef.current.src = next.url;
+        } else if (iframeRef.current) {
+          iframeRef.current.src = next.url;
+        }
+      }
+    };
+
+    return (
+      <div className="flex-1 flex flex-col bg-[#0f0f0f] min-h-0">
+        <div className="h-16x border-b border-white/5 bg-[#141414] px-4 flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-indigo-600/20 flex items-center justify-center text-indigo-400">
+              <Globe size={18} />
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-1">
+            <div className="flex flex-col gap-2 w-full">
+              <div className="flex items-center gap-1 bg-[#0b0b0b] rounded-xl px-2 py-1 border border-white/10 overflow-x-auto">
+                {browserTabs.map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => handleSwitchBrowserTab(tab.id)}
+                    className={`flex items-center gap-2 px-3 py-1 rounded-lg text-[11px] whitespace-nowrap ${tab.id === activeBrowserTabId ? 'bg-white text-black' : 'bg-transparent text-slate-300 hover:bg-white/10'}`}
+                  >
+                    <span className="max-w-[120px] truncate">{tab.title || tab.url}</span>
+                    {browserTabs.length > 1 && (
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleCloseBrowserTab(tab.id);
+                        }}
+                        className="text-slate-500 hover:text-slate-900 text-[10px]"
+                      >
+                        ×
+                      </span>
+                    )}
+                  </button>
+                ))}
+                <button
+                  onClick={handleNewBrowserTab}
+                  className="ml-1 w-6 h-6 flex items-center justify-center rounded-fullx bg-white/5 text-slate-200 hover:bg-white/20 text-xs border border-danger"
+                >
+                  +
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleBack}
+                  disabled={!isElectron || !canGoBack}
+                  className={`p-2 rounded-lg border text-xs flex items-center justify-center ${!isElectron || !canGoBack ? 'border-white/10 text-slate-600' : 'border-white/10 text-slate-300 hover:bg-white/5'}`}
+                >
+                  <ArrowLeft size={16} />
+                </button>
+                <button
+                  onClick={handleForward}
+                  disabled={!isElectron || !canGoForward}
+                  className={`p-2 rounded-lg border text-xs flex items-center justify-center ${!isElectron || !canGoForward ? 'border-white/10 text-slate-600' : 'border-white/10 text-slate-300 hover:bg-white/5'}`}
+                >
+                  <ArrowRight size={16} />
+                </button>
+                <button
+                  onClick={handleReload}
+                  className="p-2 rounded-lg border border-white/10 text-slate-300 hover:bg-white/5 flex items-center justify-center"
+                >
+                  <RefreshCw size={16} />
+                </button>
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    value={browserUrl}
+                    onChange={(e) => setBrowserUrl(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleNavigate(browserUrl);
+                    }}
+                    placeholder="Masukkan URL, contoh: https://www.youtube.com/"
+                    className="w-full bg-[#0b0b0b] border border-white/10 rounded-xl py-2.5 px-4 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                  />
+                  {isPageLoading && (
+                    <Loader2 size={14} className="animate-spin text-indigo-400 absolute right-3 top-1/2 -translate-y-1/2" />
+                  )}
+                </div>
+                <button
+                  onClick={() => handleNavigate(browserUrl)}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-500 flex items-center gap-2"
+                >
+                  Pergi
+                </button>
+                <button
+                  onClick={handleOpenProjectModal}
+                  disabled={!isSocialUrl || isDownloading}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 ${!isSocialUrl || isDownloading ? 'bg-white/10 text-slate-500 cursor-not-allowed' : 'bg-emerald-600 text-white hover:bg-emerald-500'}`}
+                >
+                  {isDownloading ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                  <span>Download Video</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="flex-1 bg-black">
+          {isElectron ? (
+            <webview
+              ref={webviewRef}
+              src={browserUrl}
+              allowpopups="true"
+              style={{ width: '100%', height: '100%' }}
+            />
+          ) : (
+            <iframe
+              ref={iframeRef}
+              src={browserUrl}
+              className="w-full h-full border-0 bg-black"
+            />
+          )}
+        </div>
+        {showProjectModal && (
+          <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+            <div className="bg-[#141414] border border-white/10 rounded-2xl w-full max-w-md max-h-[80vh] overflow-hidden flex flex-col">
+              <div className="p-4 border-b border-white/10 flex items-center justify-between">
+                <div>
+                  <div className="text-sm font-bold text-white">Pilih Project</div>
+                  <div className="text-[11px] text-slate-500">Video akan di-download dan dimasukkan ke project ini.</div>
+                </div>
+                <button
+                  onClick={() => setShowProjectModal(false)}
+                  className="text-slate-500 hover:text-white"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                {isLoadingProjects ? (
+                  <div className="flex items-center justify-center py-6 text-slate-400 text-xs gap-2">
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>Memuat project...</span>
+                  </div>
+                ) : projects.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-slate-500">
+                    Belum ada project. Buat project di tab Projects terlebih dahulu.
+                  </div>
+                ) : (
+                  projects.map((project: any) => (
+                    <button
+                      key={project.id}
+                      onClick={() => setSelectedProjectId(project.id)}
+                      className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs text-left border ${selectedProjectId === project.id ? 'border-indigo-500 bg-indigo-500/10 text-white' : 'border-white/10 text-slate-300 hover:border-indigo-500/50'}`}
+                    >
+                      <span>{project.name}</span>
+                    </button>
+                  ))
+                )}
+                <button
+                  onClick={() => setSelectedProjectId(null)}
+                  className={`w-full mt-2 flex items-center justify-between px-3 py-2 rounded-lg text-xs border ${selectedProjectId === null ? 'border-emerald-500 bg-emerald-500/10 text-emerald-300' : 'border-white/10 text-slate-400 hover:border-emerald-500/50'}`}
+                >
+                  <span>Tanpa Project (hanya ke Library)</span>
+                </button>
+              </div>
+              <div className="p-4 border-t border-white/10 flex justify-end gap-3">
+                <button
+                  onClick={() => setShowProjectModal(false)}
+                  className="px-4 py-2 text-xs text-slate-400 hover:text-white"
+                >
+                  Batal
+                </button>
+                <button
+                  onClick={handleConfirmDownload}
+                  disabled={isDownloading || !currentUrl}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  Mulai Download
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // --- SUB-HALAMAN: RESEARCH ---
   const ResearchTab = () => (
@@ -1000,7 +1464,14 @@ const App = () => {
           <div className="col-span-3 flex justify-center py-20"><Loader2 className="animate-spin text-indigo-500" size={40} /></div>
         ) : trendingVideos.length > 0 ? (
           trendingVideos.map((video) => (
-            <div key={video.id} className="bg-[#1a1a1a] border border-white/5 rounded-xl overflow-hidden group">
+            <div
+              key={video.id}
+              className="bg-[#1a1a1a] border border-white/5 rounded-xl overflow-hidden group"
+              onContextMenu={(e) => {
+                e.preventDefault();
+                if (video.url) openQuickDownload(video.url);
+              }}
+            >
               {video.source === 'notebooklm' || video.source === 'chatgpt' || video.source === 'deepseek' ? (
                 <div className="h-44 bg-slate-900 relative flex items-center justify-center overflow-hidden">
                   <div className="text-slate-400 text-xs px-4 text-center">{video.source === 'chatgpt' ? 'ChatGPT' : (video.source === 'deepseek' ? 'DeepSeek' : 'NotebookLM')}</div>
@@ -1389,9 +1860,11 @@ const App = () => {
         <nav className="flex flex-col space-y-10">
           {[
             { id: 'projects', icon: <Film size={22} />, title: 'Projects' },
+            { id: 'browser', icon: <Globe size={22} />, title: 'Browser' },
             { id: 'research', icon: <Search size={22} />, title: 'Research' },
             { id: 'channels', icon: <Users size={22} />, title: 'Channels' },
             { id: 'library', icon: <Folder size={22} />, title: 'Library' },
+            { id: 'autoShorts', icon: <Sparkles size={22} />, title: 'Auto Shorts' },
             { id: 'editor', icon: <Layers size={22} />, title: 'Editor' },
             { id: 'captions', icon: <Type size={22} />, title: 'Captions' },
             { id: 'publish', icon: <Share2 size={22} />, title: 'Publish' }
@@ -1429,17 +1902,81 @@ const App = () => {
       {/* Kontainer Aplikasi */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
         {activeTab !== 'editor' && (
-          <div className="absolute top-1 left-0 w-full h-8 titlebar-drag-region z-50" />
+          <div className="absolutex top-1 left-0 w-full h-8 titlebar-drag-region z-50" />
         )}
         {activeTab === 'projects' && <ProjectsTab onOpenEditor={(clips) => handleOpenEditor(clips)} />}
+        {activeTab === 'browser' && <BrowserTab />}
         {activeTab === 'research' && ResearchTab()}
         {activeTab === 'channels' && <ChannelsTab onUseChannel={(url) => { setSearchUrl(url); setActiveTab('research'); }} />}
         {activeTab === 'library' && <LibraryTab videos={videos} setVideos={setVideos} isLoading={isVideosLoading} setCurrentFilePath={setCurrentFilePath} setCurrentVideoId={setCurrentVideoId} setActiveTab={setActiveTab} setTranscript={setTranscript} setMetadata={setMetadata} />}
+        {activeTab === 'autoShorts' && <AutoShortsTab />}
         {activeTab === 'editor' && EditorTab()}
         {activeTab === 'captions' && CaptionTab()}
         {activeTab === 'publish' && PublishTab()}
         {activeTab === 'settings' && <SettingsTab />}
       </main>
+
+      {quickDownloadOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#141414] border border-white/10 rounded-2xl w-full max-w-md max-h-[80vh] overflow-hidden flex flex-col">
+            <div className="p-4 border-b border-white/10 flex items-center justify-between">
+              <div>
+                <div className="text-sm font-bold text-white">Pilih Project</div>
+                <div className="text-[11px] text-slate-500">Video akan di-download dan dimasukkan ke project ini.</div>
+              </div>
+              <button
+                onClick={() => setQuickDownloadOpen(false)}
+                className="text-slate-500 hover:text-white"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {quickDownloadLoading ? (
+                <div className="flex items-center justify-center py-6 text-slate-400 text-xs gap-2">
+                  <Loader2 size={16} className="animate-spin" />
+                  <span>Memuat project...</span>
+                </div>
+              ) : quickDownloadProjects.length === 0 ? (
+                <div className="py-6 text-center text-xs text-slate-500">
+                  Belum ada project. Buat project di tab Projects terlebih dahulu.
+                </div>
+              ) : (
+                quickDownloadProjects.map((project: any) => (
+                  <button
+                    key={project.id}
+                    onClick={() => setQuickDownloadSelectedProjectId(project.id)}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs text-left border ${quickDownloadSelectedProjectId === project.id ? 'border-indigo-500 bg-indigo-500/10 text-white' : 'border-white/10 text-slate-300 hover:border-indigo-500/50'}`}
+                  >
+                    <span>{project.name}</span>
+                  </button>
+                ))
+              )}
+              <button
+                onClick={() => setQuickDownloadSelectedProjectId(null)}
+                className={`w-full mt-2 flex items-center justify-between px-3 py-2 rounded-lg text-xs border ${quickDownloadSelectedProjectId === null ? 'border-emerald-500 bg-emerald-500/10 text-emerald-300' : 'border-white/10 text-slate-400 hover:border-emerald-500/50'}`}
+              >
+                <span>Tanpa Project (hanya ke Library)</span>
+              </button>
+            </div>
+            <div className="p-4 border-t border-white/10 flex justify-end gap-3">
+              <button
+                onClick={() => setQuickDownloadOpen(false)}
+                className="px-4 py-2 text-xs text-slate-400 hover:text-white"
+              >
+                Batal
+              </button>
+              <button
+                onClick={confirmQuickDownload}
+                disabled={isDownloading || !quickDownloadUrl}
+                className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-500 disabled:opacity-50"
+              >
+                Mulai Download
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showRecorder && (
         <Recorder
