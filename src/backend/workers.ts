@@ -7,6 +7,7 @@ import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
 import crypto from 'crypto';
 import { getAIService } from './lib/ai-service';
+import { renderProjectVideo } from './lib/render-engine';
 import { saveVideo, saveTranscript, saveClip, saveJob, getVideo } from './lib/db';
 
 // Check if ffmpegPath is valid
@@ -822,5 +823,73 @@ export const startWorkers = () => {
 
   magicWorker.on('failed', (job, err) => {
     console.error(`[Magic] Job ${job?.id} failed with ${err.message}`);
+  });
+
+  const renderWorker = createWorker('render', async (job: Job) => {
+    const { layers, clips, duration, resolution, format, projectId } = job.data;
+    console.log(`[Render] Starting render for project ${projectId || 'unknown'}`);
+
+    const resolutionMap: Record<string, { width: number, height: number }> = {
+      '4k': { width: 3840, height: 2160 },
+      '1440p': { width: 2560, height: 1440 },
+      '1080p': { width: 1920, height: 1080 },
+      '720p': { width: 1280, height: 720 },
+      '480p': { width: 854, height: 480 },
+    };
+
+    const { width, height } = resolutionMap[resolution] || resolutionMap['1080p'];
+    const fps = 30;
+    const ext = format || 'mp4';
+    const outputPath = path.join(processedDir, `render_${projectId || 'project'}_${Date.now()}.${ext}`);
+
+    try {
+      await renderProjectVideo(layers, clips, duration, {
+        width,
+        height,
+        fps,
+        outputPath,
+        onProgress: async (msg: string) => {
+          console.log('[Render]', msg);
+          const match = msg.match(/(\d+)%/);
+          if (match) {
+            const percent = parseInt(match[1], 10);
+            await job.updateProgress(percent);
+          }
+        },
+      });
+
+      try {
+        saveJob({
+          id: job.id || `render_${projectId || 'project'}`,
+          type: 'render',
+          status: 'completed',
+          progress: 100,
+          result: { filePath: outputPath, projectId, resolution: { width, height }, format: ext },
+        });
+      } catch (dbErr) {
+        console.error('[DB] Failed to save render job data', dbErr);
+      }
+
+      console.log('[Render] Completed:', outputPath);
+      return { status: 'completed', filePath: outputPath };
+    } catch (error: any) {
+      console.error('[Render] Error:', error);
+      try {
+        saveJob({
+          id: job.id || `render_${projectId || 'project'}`,
+          type: 'render',
+          status: 'failed',
+          progress: 0,
+          result: { error: error.message || String(error) },
+        });
+      } catch (dbErr) {
+        console.error('[DB] Failed to save render error status', dbErr);
+      }
+      throw error;
+    }
+  });
+
+  renderWorker.on('failed', (job, err) => {
+    console.error(`[Render] Job ${job?.id} failed with ${err.message}`);
   });
 }
