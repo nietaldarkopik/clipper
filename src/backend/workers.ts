@@ -370,26 +370,48 @@ export const startWorkers = () => {
     console.log(`[Analyze] Starting analysis for ${id} with model ${modelSize || 'tiny'}`);
     job.updateProgress(1);
 
-    const files = await fs.readdir(downloadsDir);
-    // Prioritize video files and exclude artifacts like .mp3 or .json
-    let file = files.find(f => f.startsWith(id) && (f.endsWith('.mp4') || f.endsWith('.webm') || f.endsWith('.mkv')));
-
-    // Retry mechanism for file detection (wait up to 5 seconds)
-    if (!file) {
-      console.log(`[Analyze] Video file for ${id} not found initially, retrying...`);
-      for (let i = 0; i < 5; i++) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        const updatedFiles = await fs.readdir(downloadsDir);
-        file = updatedFiles.find(f => f.startsWith(id) && (f.endsWith('.mp4') || f.endsWith('.webm') || f.endsWith('.mkv')));
-        if (file) break;
+    // Prefer using filepath stored in DB (may point to processedDir or custom path)
+    let inputPath: string | null = null;
+    try {
+      const videoRecord = getVideo(id) as any;
+      if (videoRecord && videoRecord.filepath) {
+        const candidatePath = videoRecord.filepath;
+        if (await fs.pathExists(candidatePath)) {
+          inputPath = candidatePath;
+        }
       }
+    } catch (e) {
+      console.warn(`[Analyze] Failed to read video record for ${id}`, e);
     }
 
-    if (!file) {
-      throw new Error(`File for ${id} not found in downloads directory after retries`);
+    // Fallback: search in downloads directory (legacy behavior)
+    if (!inputPath) {
+      const files = await fs.readdir(downloadsDir);
+      let file = files.find(f =>
+        f.startsWith(id) &&
+        (f.endsWith('.mp4') || f.endsWith('.webm') || f.endsWith('.mkv'))
+      );
+
+      if (!file) {
+        console.log(`[Analyze] Video file for ${id} not found initially in downloads, retrying...`);
+        for (let i = 0; i < 5; i++) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          const updatedFiles = await fs.readdir(downloadsDir);
+          file = updatedFiles.find(f =>
+            f.startsWith(id) &&
+            (f.endsWith('.mp4') || f.endsWith('.webm') || f.endsWith('.mkv'))
+          );
+          if (file) break;
+        }
+      }
+
+      if (!file) {
+        throw new Error(`File for ${id} not found in downloads directory after retries`);
+      }
+
+      inputPath = path.join(downloadsDir, file);
     }
 
-    const inputPath = path.join(downloadsDir, file);
     const audioPath = path.join(downloadsDir, `${id}.wav`);
     const transcriptPath = path.join(transcriptsDir, `${id}.json`);
 

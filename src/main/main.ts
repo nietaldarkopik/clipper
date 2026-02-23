@@ -17,6 +17,7 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
+      webviewTag: true,
     },
     backgroundColor: '#0f0f0f',
     titleBarStyle: 'hidden', // Matches the custom header in design

@@ -61,14 +61,25 @@ export const VideoDetailsModal = ({ videoId, onClose }: VideoDetailsModalProps) 
     // Helper to get video source URL
     const getVideoSrc = (video: any) => {
         if (!video) return '';
-        // If it's a local file path, convert to server URL
+
         if (video.filepath && (video.filepath.includes('/') || video.filepath.includes('\\'))) {
-            const filename = video.filepath.split(/[\\/]/).pop();
-            // Assuming served under /downloads/ if it's a downloaded file
-            // We might need a more robust way to map paths to URLs if we have multiple static roots
-            // For now, we assume all local files are in downloads
+            const parts = video.filepath.split(/[\\/]/);
+            const filename = parts.pop();
+            const parentDir = parts.pop() || '';
+
+            if (!filename) return '';
+
+            if (parentDir.toLowerCase() === 'processed') {
+                return `${BASE_URL}/processed/${filename}`;
+            }
+
+            if (parentDir.toLowerCase() === 'downloads') {
+                return `${BASE_URL}/downloads/${filename}`;
+            }
+
             return `${BASE_URL}/downloads/${filename}`;
         }
+
         return video.url;
     };
 

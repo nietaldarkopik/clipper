@@ -54,20 +54,20 @@ fastify.register(fastifyStatic, {
   wildcard: false
 });
 
-// Serve Downloads/Uploads Directory
+// Serve Downloads/Uploads Directory (use process.cwd so it matches workers.ts)
 fastify.register(fastifyStatic, {
-  root: path.join(__dirname, '../../downloads'),
+  root: path.join(process.cwd(), 'downloads'),
   prefix: '/downloads/',
   decorateReply: false,
-  wildcard: true // explicit true to serve files
+  wildcard: true
 });
 
-// Serve Processed Directory
+// Serve Processed Directory (final rendered/processed videos)
 fastify.register(fastifyStatic, {
-  root: path.join(__dirname, '../../processed'),
+  root: path.join(process.cwd(), 'processed'),
   prefix: '/processed/',
-  decorateReply: false, // Avoid conflict with previous register
-  wildcard: true // explicit true to serve files
+  decorateReply: false,
+  wildcard: true
 });
 
 fastify.get('/api/health', async (_request, _reply) => {
