@@ -848,6 +848,18 @@ const App = () => {
       return;
     }
 
+    const hasActiveAnalyze = processingList.some(item => {
+      if (!item || !item.queueName) return false;
+      if (item.queueName !== 'analyze') return false;
+      const state = String(item.status || '').toLowerCase();
+      return state !== 'completed' && state !== 'failed';
+    });
+
+    if (hasActiveAnalyze) {
+      alert('Masih ada proses analisis yang berjalan. Tunggu selesai dulu sebelum memulai analisis baru.');
+      return;
+    }
+
     setIsProcessingAI(true);
     try {
       const res = await analyzeVideo(idToAnalyze);
@@ -1899,7 +1911,6 @@ const App = () => {
         </div>
       </aside>
 
-      {/* Kontainer Aplikasi */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
         {activeTab !== 'editor' && (
           <div className="absolutex top-1 left-0 w-full h-8 titlebar-drag-region z-50" />
@@ -1914,6 +1925,53 @@ const App = () => {
         {activeTab === 'captions' && CaptionTab()}
         {activeTab === 'publish' && PublishTab()}
         {activeTab === 'settings' && <SettingsTab />}
+
+        {processingList.length > 0 && (
+          <div className="fixed bottom-4 right-4 z-40 w-80 bg-[#141414] border border-white/10 rounded-2xl shadow-xl shadow-black/60">
+            <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Loader2 size={14} className="text-indigo-400 animate-spin" />
+                <span className="text-[11px] font-bold tracking-widest uppercase text-slate-300">Aktivitas Job</span>
+              </div>
+              <span className="text-[10px] text-slate-500">{processingList.length}</span>
+            </div>
+            <div className="max-h-64 overflow-y-auto p-2 space-y-2">
+              {processingList.map(item => {
+                const isCompleted = String(item.status || '').toLowerCase() === 'completed';
+                const isFailed = String(item.status || '').toLowerCase() === 'failed';
+                const label =
+                  item.queueName === 'download'
+                    ? 'Download'
+                    : item.queueName === 'analyze'
+                    ? 'Analyze'
+                    : item.queueName === 'upload'
+                    ? 'Upload'
+                    : item.queueName === 'process'
+                    ? 'Process'
+                    : item.queueName === 'render'
+                    ? 'Render'
+                    : 'Job';
+                const statusLabel = isCompleted ? 'Selesai' : isFailed ? 'Gagal' : 'Berjalan';
+                const barColor = isFailed ? 'bg-red-500' : isCompleted ? 'bg-emerald-500' : 'bg-indigo-500';
+                const percent = isCompleted ? 100 : item.progress || 0;
+                return (
+                  <div key={item.id} className="p-2 rounded-xl bg-white/5 border border-white/5">
+                    <div className="flex justify-between items-center text-[10px] mb-1.5">
+                      <div className="flex flex-col">
+                        <span className="font-semibold text-slate-100 truncate max-w-[140px]">{item.name}</span>
+                        <span className="text-[9px] text-slate-400">{label} • {statusLabel}</span>
+                      </div>
+                      <span className="text-indigo-400 font-mono">{percent}%</span>
+                    </div>
+                    <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                      <div className={`h-full ${barColor} transition-all duration-500`} style={{ width: `${percent}%` }}></div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </main>
 
       {quickDownloadOpen && (

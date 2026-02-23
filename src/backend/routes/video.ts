@@ -191,16 +191,22 @@ export default async function videoRoutes(fastify: FastifyInstance) {
             return reply.code(400).send({ error: 'Video ID is required' });
         }
 
-        // Validate if file exists before queuing
         const downloadsDir = path.join(process.cwd(), 'downloads');
         try {
-            const files = await fs.readdir(downloadsDir);
-            const fileExists = files.some(f => f.startsWith(id) && (f.endsWith('.mp4') || f.endsWith('.webm') || f.endsWith('.mkv')));
-            
+            let fileExists = false;
+            const video = getVideo(id) as any;
+
+            if (video && video.filepath) {
+                fileExists = await fs.pathExists(video.filepath);
+            }
+
+            if (!fileExists) {
+                const files = await fs.readdir(downloadsDir);
+                fileExists = files.some(f => f.startsWith(id) && (f.endsWith('.mp4') || f.endsWith('.webm') || f.endsWith('.mkv')));
+            }
+
             if (!fileExists) {
                 console.warn(`[API] Analysis request for missing file: ${id}`);
-                // Optional: Check if it was a failed download
-                const video = getVideo(id);
                 if (video && video.status === 'failed') {
                     return reply.code(400).send({ error: 'Video download failed previously. Please retry download first.' });
                 }
