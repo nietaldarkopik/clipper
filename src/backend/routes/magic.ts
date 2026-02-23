@@ -44,12 +44,11 @@ export default async function magicRoutes(fastify: FastifyInstance) {
     });
 
     // GET /magic/batch/:batchId
-    fastify.get('/magic/batch/:batchId', async (request, reply) => {
+    fastify.get('/magic/batch/:batchId', async (request) => {
         const { batchId } = request.params as { batchId: string };
-        // Placeholder for batch status
-        return { 
-            batchId, 
-            message: "Please poll individual job statuses using /magic/status/:jobId" 
+        return {
+            batchId,
+            message: "Please poll individual job statuses using /magic/status/:jobId"
         };
     });
 

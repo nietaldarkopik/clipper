@@ -66,24 +66,8 @@ export const VideoDetailsModal = ({ videoId, onClose }: VideoDetailsModalProps) 
 
         if (video.filepath && (video.filepath.includes('/') || video.filepath.includes('\\'))) {
             const filename = video.filepath.split(/[\\/]/).pop();
-            // Check if it's in processed or downloads
             const dir = video.filepath.includes('processed') ? 'processed' : 'downloads';
             return `${BASE_URL}/${dir}/${filename}`;
-            const parts = video.filepath.split(/[\\/]/);
-            const filename = parts.pop();
-            const parentDir = parts.pop() || '';
-
-            if (!filename) return '';
-
-            if (parentDir.toLowerCase() === 'processed') {
-                return `${BASE_URL}/processed/${filename}`;
-            }
-
-            if (parentDir.toLowerCase() === 'downloads') {
-                return `${BASE_URL}/downloads/${filename}`;
-            }
-
-            return `${BASE_URL}/downloads/${filename}`;
         }
 
         return video.url;

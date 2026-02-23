@@ -24,7 +24,7 @@ async function testMagicLink() {
         });
 
         console.log('Response:', response.data);
-        const { jobs, batchId } = response.data;
+        const { jobs } = response.data;
         
         if (!jobs || jobs.length === 0) {
             console.error('No jobs returned!');
