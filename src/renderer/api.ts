@@ -200,6 +200,48 @@ export const generateSpeech = async (text: string, voice?: string) => {
   return response.data;
 };
 
+// Caption Service API (Python Backend)
+export const CAPTION_API_URL = 'http://localhost:8000/api';
+const captionApi = axios.create({
+    baseURL: CAPTION_API_URL,
+    headers: {
+        'Content-Type': 'application/json',
+    },
+});
+
+export const startCaptionJob = async (fileOrVideoId: File | string) => {
+    const formData = new FormData();
+    if (typeof fileOrVideoId === 'string') {
+        formData.append('video_id', fileOrVideoId);
+    } else {
+        formData.append('file', fileOrVideoId);
+    }
+    
+    const response = await captionApi.post('/caption/start', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data;
+};
+
+export const getCaptionJobStatus = async (jobId: string) => {
+    const response = await captionApi.get(`/caption/${jobId}`);
+    return response.data;
+};
+
+export const renderCaptionVideo = async (videoId: string, captionJson: any[], styleTemplate: any) => {
+    const response = await captionApi.post('/render-caption-video', {
+        video_id: videoId,
+        caption_json: captionJson,
+        style_template: styleTemplate
+    });
+    return response.data;
+};
+
+export const getRenderJobStatus = async (jobId: string) => {
+    const response = await captionApi.get(`/render-status/${jobId}`);
+    return response.data;
+};
+
 export const mergeClips = async (filePaths: string[], projectId: string, outputName: string) => {
   const response = await api.post('/editor/merge', { filePaths, projectId, outputName });
   return response.data;

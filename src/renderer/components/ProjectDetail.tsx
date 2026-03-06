@@ -578,6 +578,21 @@ export const ProjectDetail = ({ project: initialProject, onBack, onOpenEditor }:
         });
     };
 
+    const handleDownloadClipFile = (clip: any) => {
+        if (!clip.filepath) return;
+        const url = getClipUrl(clip.filepath);
+        window.open(url, '_blank'); // Buka di tab/jendela baru
+    };
+
+    const handleCopyClipUrl = (clip: any) => {
+        if (!clip.filepath) return;
+        const url = getClipUrl(clip.filepath);
+        console.log('URL yang disalin:', url); // Log URL untuk debugging
+        navigator.clipboard.writeText(url)
+            .then(() => alert('URL klip berhasil disalin!'))
+            .catch(err => console.error('Gagal menyalin URL:', err));
+    };
+
     return (
         <div className="flex flex-col h-full bg-slate-900">
             {/* Active Job Overlay/Panel */}
@@ -857,6 +872,18 @@ export const ProjectDetail = ({ project: initialProject, onBack, onOpenEditor }:
                                                     className="flex-1 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-400 border border-indigo-600/30 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition"
                                                 >
                                                     <Layers size={12} /> Edit
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDownloadClipFile(clip)}
+                                                    className="flex-1 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-600/30 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition"
+                                                >
+                                                    <Download size={12} /> Download
+                                                </button>
+                                                <button
+                                                    onClick={() => handleCopyClipUrl(clip)}
+                                                    className="flex-1 py-1.5 bg-yellow-600/20 hover:bg-yellow-600/40 text-yellow-400 border border-yellow-600/30 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition"
+                                                >
+                                                    <Copy size={12} /> Copy URL
                                                 </button>
                                                 <button
                                                     onClick={() => handleUnprocessClip(clip)}

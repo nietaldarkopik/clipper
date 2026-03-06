@@ -31,6 +31,14 @@ import {
     Folder
 } from 'lucide-react';
 
+import {
+    startCaptionJob,
+    getCaptionJobStatus,
+    renderCaptionVideo,
+    getRenderJobStatus,
+    CAPTION_API_URL
+} from '../../api';
+
 interface Track {
     id: number;
     type: 'video' | 'audio' | 'text';
@@ -97,7 +105,145 @@ export const VideoEditor = ({
     const timelineRef = useRef<HTMLDivElement>(null);
     const videoRef = useRef<HTMLVideoElement>(null);
 
-    // Formatter for time
+    // Captioning State
+    const [isCaptioning, setIsCaptioning] = useState(false);
+    const [captions, setCaptions] = useState<any[]>([]);
+    const [captionJobId, setCaptionJobId] = useState<string | null>(null);
+    const [isRendering, setIsRendering] = useState(false);
+    const [renderJobId, setRenderJobId] = useState<string | null>(null);
+    const [renderStatus, setRenderStatus] = useState<string>("");
+    const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+    const [currentVideoId, setCurrentVideoId] = useState<string | null>(null);
+
+    const captionStyles: Record<string, any> = {
+        simple: { font: "Arial", size: 24, color: "#FFFFFF", stroke: "#000000", position: "bottom", label: "Simple" },
+        youtube: { font: "Roboto", size: 32, color: "#FFFF00", stroke: "#000000", position: "bottom", bold: true, label: "YouTube" },
+        tiktok: { font: "Montserrat", size: 48, color: "#FFFFFF", stroke: "#000000", position: "middle", bold: true, background: true, label: "TikTok" },
+        karaoke: { font: "Comic Sans MS", size: 36, color: "#00FFFF", stroke: "#0000CC", position: "bottom", italic: true, label: "Karaoke" },
+        minimal: { font: "Helvetica", size: 20, color: "#CCCCCC", stroke: "", position: "bottom", label: "Minimal" }
+    };
+    const [selectedStyleKey, setSelectedStyleKey] = useState("simple");
+
+    const handleAutoCaption = async () => {
+        const videoClip = timeline.clips.find(c => c.type === 'video');
+        if (!videoClip) {
+            alert("Please add a video to the timeline first.");
+            return;
+        }
+
+        setIsCaptioning(true);
+        try {
+            let fileToUpload: File | string = videoClip.filepath || "";
+            
+            if (fileToUpload.startsWith('blob:') || fileToUpload.startsWith('http')) {
+                 const res = await fetch(fileToUpload);
+                 const blob = await res.blob();
+                 fileToUpload = new File([blob], "video.mp4", { type: "video/mp4" });
+            } 
+            
+            const job = await startCaptionJob(fileToUpload);
+            setCaptionJobId(job.job_id);
+            if (job.video_id) {
+                setCurrentVideoId(job.video_id);
+            }
+            
+            const interval = setInterval(async () => {
+                try {
+                    const status = await getCaptionJobStatus(job.job_id);
+                    if (status.status === 'completed') {
+                        clearInterval(interval);
+                        setCaptions(status.result.segments);
+                        setIsCaptioning(false);
+                        
+                        const newClips = status.result.segments.map((seg: any, index: number) => ({
+                            id: `caption_${Date.now()}_${index}`,
+                            trackId: 2, 
+                            name: seg.text,
+                            startTime: seg.start,
+                            duration: seg.end - seg.start,
+                            offset: 0,
+                            type: 'text',
+                            color: 'bg-orange-600/40'
+                        }));
+                        
+                        const otherClips = timeline.clips.filter(c => c.type !== 'text');
+                        updateTimeline({ ...timeline, clips: [...otherClips, ...newClips] });
+                        
+                    } else if (status.status === 'failed') {
+                        clearInterval(interval);
+                        setIsCaptioning(false);
+                        alert("Captioning failed: " + status.error);
+                    }
+                } catch (e) {
+                    console.error(e);
+                    clearInterval(interval);
+                    setIsCaptioning(false);
+                }
+            }, 1000);
+            
+        } catch (error) {
+            console.error("Captioning error:", error);
+            setIsCaptioning(false);
+            alert("Failed to start captioning. Ensure backend is running.");
+        }
+    };
+
+    const handleRenderCaptionedVideo = async () => {
+        if (!currentVideoId) {
+            alert("Please run Auto Caption first to upload the video.");
+            return;
+        }
+        
+        const textClips = timeline.clips.filter(c => c.type === 'text').sort((a, b) => a.startTime - b.startTime);
+        const segments = textClips.map(c => ({
+            start: c.startTime,
+            end: c.startTime + c.duration,
+            text: c.name
+        }));
+        
+        if (segments.length === 0) {
+            alert("No captions to render.");
+            return;
+        }
+
+        setIsRendering(true);
+        setRenderStatus("Starting render...");
+        setDownloadUrl(null);
+        
+        try {
+            const style = captionStyles[selectedStyleKey] || captionStyles.simple;
+            const job = await renderCaptionVideo(currentVideoId, segments, style);
+            setRenderJobId(job.job_id);
+            
+            const interval = setInterval(async () => {
+                try {
+                    const status = await getRenderJobStatus(job.job_id);
+                    if (status.status === 'completed') {
+                        clearInterval(interval);
+                        setIsRendering(false);
+                        setRenderStatus("Render complete!");
+                        setDownloadUrl(`${CAPTION_API_URL}${status.result.video_url}`);
+                    } else if (status.status === 'failed') {
+                        clearInterval(interval);
+                        setIsRendering(false);
+                        setRenderStatus("Render failed: " + status.error);
+                    } else {
+                        setRenderStatus(`Rendering... (${status.status})`);
+                    }
+                } catch (e) {
+                    console.error(e);
+                    clearInterval(interval);
+                    setIsRendering(false);
+                    setRenderStatus("Error checking status");
+                }
+            }, 2000);
+
+        } catch (e) {
+             console.error(e);
+             setIsRendering(false);
+             setRenderStatus("Failed to start render");
+        }
+    };
     const formatTime = (seconds: number) => {
         const h = Math.floor(seconds / 3600);
         const m = Math.floor((seconds % 3600) / 60);
@@ -399,6 +545,73 @@ export const VideoEditor = ({
                                         </div>
                                     </section>
                                 </>
+                            )}
+
+                            {activeSecondaryTab === 'text' && (
+                                <div className="space-y-6">
+                                    <section>
+                                        <h4 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-3">Auto Caption</h4>
+                                        <button 
+                                            onClick={handleAutoCaption}
+                                            disabled={isCaptioning}
+                                            className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition"
+                                        >
+                                            {isCaptioning ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                                            {isCaptioning ? "Generating..." : "Generate Captions"}
+                                        </button>
+                                        {captions.length > 0 && (
+                                            <p className="text-[10px] text-emerald-500 mt-2 flex items-center gap-1">
+                                                <CheckCircle2 size={10} /> Generated {captions.length} captions
+                                            </p>
+                                        )}
+                                    </section>
+
+                                    <section>
+                                        <h4 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-3">Style Template</h4>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            {Object.keys(captionStyles).map((styleKey) => (
+                                                <button
+                                                    key={styleKey}
+                                                    onClick={() => setSelectedStyleKey(styleKey)}
+                                                    className={`h-20 rounded-lg border flex flex-col items-center justify-center gap-1 transition relative ${selectedStyleKey === styleKey ? 'bg-indigo-600/20 border-indigo-500' : 'bg-white/5 border-white/10 hover:border-white/20'}`}
+                                                >
+                                                    <Type size={20} className={selectedStyleKey === styleKey ? 'text-indigo-400' : 'text-slate-500'} />
+                                                    <span className="text-[10px] font-medium">{captionStyles[styleKey].label}</span>
+                                                    {selectedStyleKey === styleKey && (
+                                                        <div className="absolute top-1 right-1 text-indigo-500">
+                                                            <CheckCircle2 size={10} />
+                                                        </div>
+                                                    )}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </section>
+
+                                    <section>
+                                        <h4 className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-3">Export</h4>
+                                        <button 
+                                            onClick={handleRenderCaptionedVideo}
+                                            disabled={isRendering || !currentVideoId}
+                                            className="w-full bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition"
+                                        >
+                                            {isRendering ? <Loader2 size={14} className="animate-spin" /> : <Monitor size={14} />}
+                                            {isRendering ? "Rendering..." : "Burn Captions & Export"}
+                                        </button>
+                                        {renderStatus && (
+                                            <p className="text-[10px] text-slate-400 mt-2 text-center">{renderStatus}</p>
+                                        )}
+                                        {downloadUrl && (
+                                            <a 
+                                                href={downloadUrl} 
+                                                target="_blank" 
+                                                rel="noreferrer"
+                                                className="block mt-2 text-center text-xs font-bold text-indigo-400 hover:text-indigo-300 underline"
+                                            >
+                                                Download Video
+                                            </a>
+                                        )}
+                                    </section>
+                                </div>
                             )}
 
                             {activeSecondaryTab === 'effects' && (
