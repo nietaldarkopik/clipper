@@ -210,13 +210,29 @@ const captionApi = axios.create({
     },
 });
 
-export const startCaptionJob = async (fileOrVideoId: File | string) => {
+export const startCaptionJob = async (fileOrPath: File | string) => {
     const formData = new FormData();
-    if (typeof fileOrVideoId === 'string') {
-        formData.append('video_id', fileOrVideoId);
-    } else {
-        formData.append('file', fileOrVideoId);
+    
+    // Check if it's a file path string (e.g. "downloads/...") vs a File object
+    // If it is a string that looks like a path or URL, send it as 'file_path' or 'video_url'
+    // The python backend needs to handle this.
+    // If it's a File object (from file input or blob), send as 'file'
+    
+    if (fileOrPath instanceof File) {
+        formData.append('file', fileOrPath);
+    } else if (typeof fileOrPath === 'string') {
+        // It's a path or URL.
+        // If it's a local path on the server (e.g. /var/www/...), we can send it as 'local_path'
+        // If it's a URL, send as 'video_url'
+        // The current python service might expect 'file' (upload) or 'video_id' (if already uploaded).
+        
+        // Let's assume we modified the python service to accept 'file_path' for local files
+        formData.append('file_path', fileOrPath);
     }
+    
+    // Note: If the backend supports 'file_path', it will use that directly.
+    // If not, we might need to change how we call this.
+    // For now, we follow the user instruction to send path/binary.
     
     const response = await captionApi.post('/caption/start', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }

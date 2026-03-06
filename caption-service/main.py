@@ -149,15 +149,27 @@ def process_render_job(job_id: str, video_id: str, segments: List[Dict], style_o
 
 # API Endpoints
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "Clipper Caption Service"}
+
+@app.get("/api/health")
+async def api_health_check():
+    return {"status": "ok", "service": "Clipper Caption Service"}
+
 @app.post("/api/caption/start")
 async def start_caption(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(None),
-    video_id: str = Form(None)
+    video_id: str = Form(None),
+    file_path: str = Form(None)
 ):
     """
     Start a caption generation job.
-    Accepts either a file upload OR a video_id (if already uploaded).
+    Accepts either:
+    1. file (UploadFile): Binary upload
+    2. video_id (str): ID of a previously uploaded video in this service
+    3. file_path (str): Absolute path to a video file on the server (for local integration)
     """
     if file:
         # Save file
@@ -168,13 +180,39 @@ async def start_caption(
         # Let's try passing file.file directly.
         file_path, new_video_id = video_manager.save_upload(file.file, file.filename)
         current_video_id = new_video_id
+    elif file_path:
+        # Direct file path on server
+        if not os.path.exists(file_path):
+             raise HTTPException(status_code=400, detail=f"File not found at path: {file_path}")
+        
+        # Generate a video_id for this job context
+        # We might want to "import" it or just use it. 
+        # video_manager.extract_audio needs a video_id to name the output audio.
+        current_video_id = str(uuid.uuid4())
+        # We don't need to copy the video if we just read from it.
+        # But video_manager.get_video_path(video_id) won't work later if we don't save it or track it.
+        # However, process_caption_job receives video_path directly.
+        # Only subsequent steps might need it? 
+        # process_caption_job uses video_manager.extract_audio(video_path, video_id) -> works
+        # Then it saves subtitles using video_id. -> works
+        # The result urls: /api/download/subtitle/{video_id}.srt -> works if file exists there.
+        
+        # NOTE: If we want to Render later, process_render_job calls video_manager.get_video_path(video_id).
+        # This WILL FAIL because the video is not in uploads dir.
+        # We should probably register this external path or handle it.
+        
+        # For now, let's just allow captioning. Rendering might fail if not handled.
+        # To support rendering, we might need to symlink or copy, or update video_manager to handle external paths map.
+        # Let's simple copy it for now to be safe? Or just update get_video_path logic?
+        # Since this is "local integration", maybe we assume the path is persistent.
+        pass
     elif video_id:
         current_video_id = video_id
         file_path = video_manager.get_video_path(video_id)
         if not file_path:
             raise HTTPException(status_code=404, detail="Video not found")
     else:
-        raise HTTPException(status_code=400, detail="Either file or video_id must be provided")
+        raise HTTPException(status_code=400, detail="Either file, video_id, or file_path must be provided")
 
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
@@ -184,6 +222,27 @@ async def start_caption(
         "status": JobStatus.PENDING
     }
     
+    # If we used file_path, we might need to store it in jobs or video_manager for render step
+    if 'file_path' in locals() and file_path and not video_id and not file:
+         # Store the external path in the job for reference if needed (though jobs is ephemeral)
+         jobs[job_id]['external_source'] = file_path
+         
+         # Hack for Render: process_render_job calls video_manager.get_video_path(video_id).
+         # We can monkey-patch or update video_manager.
+         # Or simpler: Just copy/symlink the external file to the upload dir with the UUID name.
+         # This ensures everything else works seamlessly.
+         try:
+             ext = os.path.splitext(file_path)[1] or ".mp4"
+             internal_path = os.path.join(video_manager.upload_dir, f"{current_video_id}{ext}")
+             if not os.path.exists(internal_path):
+                 # Symlink if possible (fast), else copy
+                 try:
+                     os.symlink(file_path, internal_path)
+                 except OSError:
+                     shutil.copy2(file_path, internal_path)
+         except Exception as e:
+             logger.warning(f"Failed to link external video: {e}")
+
     background_tasks.add_task(process_caption_job, job_id, current_video_id, file_path)
     
     return {"job_id": job_id, "video_id": current_video_id, "status": "pending"}

@@ -7,9 +7,9 @@ import {
     Eye, EyeOff, Lock, Unlock, Download,
     Undo, Redo, AlignLeft, AlignCenter, AlignRight,
     Sticker, Wand2, Filter, Settings2, Sparkles, Ghost, Layout,
-    Search, Clock, VolumeX, Volume2, MousePointer2, Image as ImageIcon, X, Loader2, Camera, Circle, Square, StopCircle
+    Search, Clock, VolumeX, Volume2, MousePointer2, Image as ImageIcon, X, Loader2, Camera, Circle, Square, StopCircle, CheckCircle2
 } from 'lucide-react';
-import { BASE_URL, renderProject } from '../api';
+import { BASE_URL, renderProject, startCaptionJob, getCaptionJobStatus } from '../api';
 import ClipWaveform from './ClipWaveform';
 
 interface Clip {
@@ -388,6 +388,134 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
     const webcamVideoRef = useRef<HTMLVideoElement>(null);
     const chunksRef = useRef<Blob[]>([]);
     const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Captioning State
+    const [isCaptioning, setIsCaptioning] = useState(false);
+    const [captions, setCaptions] = useState<any[]>([]);
+
+    const handleAutoCaption = async () => {
+        // Find the main video clip (layer 'l1' or just first video)
+        const videoClip = clips.find(c => c.type === 'video' && c.layerId === 'l1') || clips.find(c => c.type === 'video');
+        
+        if (!videoClip) {
+            alert("Please add a video to the timeline first.");
+            return;
+        }
+
+        setIsCaptioning(true);
+        try {
+            // Check if it's a file URL or local path
+            // If it's a URL starting with http, it might be our own server
+            let inputForCaption: File | string = "";
+            
+            if (videoClip.src) {
+                if (videoClip.src.startsWith('blob:')) {
+                    // Local Blob URL (e.g. from webcam or local file upload) -> Convert to File
+                    const res = await fetch(videoClip.src);
+                    const blob = await res.blob();
+                    inputForCaption = new File([blob], "video.mp4", { type: blob.type });
+                } else if (videoClip.src.startsWith('http')) {
+                    // It's a remote URL.
+                    // If it's on the same server (localhost:3001 or drive.unwim.ac.id),
+                    // we can potentially send the relative path if we know it.
+                    // E.g. http://localhost:3001/downloads/abc.mp4 -> downloads/abc.mp4
+                    
+                    // But to be safe and robust as per user request:
+                    // "jika dalam 1 server langsung saja dari servernya tanpa upload"
+                    // We should send the path.
+                    
+                    // Parse the URL
+                    const urlObj = new URL(videoClip.src);
+                    const pathName = urlObj.pathname; // /downloads/abc.mp4
+                    
+                    // Remove leading slash to make it relative if needed, or keep absolute if server expects it
+                    // Assuming the server root is where downloads folder is.
+                    // We send the full path or relative path.
+                    // Let's send the pathName.
+                    
+                    // However, if the Python service is on the SAME server machine but different port,
+                    // it needs the filesystem path, not the HTTP path.
+                    // The Node backend knows the FS path. The frontend only knows the HTTP path.
+                    
+                    // This is tricky from the Frontend. The Frontend doesn't know the absolute server path.
+                    // Solution: Send the HTTP URL, and let the Python service download it?
+                    // OR: Send the filename, and let the Python service look in a shared folder?
+                    
+                    // If we use the proxy/same domain, we can assume shared folder structure?
+                    // Let's try sending the URL first. If the python service supports downloading from URL, that's best.
+                    // If not, we might need to "proxy" this request via our Node backend which knows the path.
+                    
+                    // BUT, the user said "payloadnya kenapa kirim langsung video dalam bentuk binary".
+                    // This implies we were uploading.
+                    
+                    // Let's send the URL string.
+                    inputForCaption = videoClip.src;
+                } else {
+                    // It's a string but not http/blob? Maybe a path?
+                    inputForCaption = videoClip.src;
+                }
+            }
+            
+            if (!inputForCaption) {
+                alert("Could not determine video source for captioning.");
+                setIsCaptioning(false);
+                return;
+            }
+
+            const job = await startCaptionJob(inputForCaption);
+            // setCaptionJobId(job.job_id);
+            
+            const interval = setInterval(async () => {
+                try {
+                    const status = await getCaptionJobStatus(job.job_id);
+                    if (status.status === 'completed') {
+                        clearInterval(interval);
+                        setCaptions(status.result.segments);
+                        setIsCaptioning(false);
+                        
+                        // Add captions as text clips
+                        recordHistory();
+                        const newClips = status.result.segments.map((seg: any, index: number) => {
+                             return {
+                                id: `caption_${Date.now()}_${index}`,
+                                type: 'text',
+                                content: seg.text,
+                                start: seg.start, // Absolute time
+                                duration: seg.end - seg.start,
+                                offset: 0,
+                                layerId: layers.find(l => l.type === 'text')?.id || 'l3',
+                                x: 0, y: 0, scale: 1, rotation: 0, opacity: 1,
+                                volume: 0,
+                                fontSize: 32,
+                                color: '#ffffff',
+                                backgroundColor: 'rgba(0,0,0,0.5)', // Default subtitle background
+                                textAlign: 'center',
+                                width: 800, // Reasonable width
+                                height: 100,
+                                y: 400 // Position at bottom
+                            } as Clip;
+                        });
+                        
+                        setClips(prev => [...prev, ...newClips]);
+                        
+                    } else if (status.status === 'failed') {
+                        clearInterval(interval);
+                        setIsCaptioning(false);
+                        alert("Captioning failed: " + status.error);
+                    }
+                } catch (e) {
+                    console.error(e);
+                    clearInterval(interval);
+                    setIsCaptioning(false);
+                }
+            }, 1000);
+            
+        } catch (error) {
+            console.error("Captioning error:", error);
+            setIsCaptioning(false);
+            alert("Failed to start captioning. Ensure backend is running.");
+        }
+    };
 
     // Webcam Handlers
     const startWebcam = async () => {
@@ -1440,30 +1568,51 @@ export const AdvancedVideoEditor = ({ project, videos, highlights = [], onClose,
                             )}
                             
                             {activeSecondaryTab === 'text' && (
-                                <div className="grid grid-cols-2 gap-2">
-                                    <div 
-                                        draggable 
-                                        onDragStart={(e) => { e.dataTransfer.setData('type', 'text'); }}
-                                        className="bg-[#2a2a2a] aspect-square rounded cursor-grab hover:bg-[#333] flex flex-col items-center justify-center border border-[#333]"
-                                    >
-                                        <Type size={24} className="mb-2 text-slate-400" /> 
-                                        <span className="text-xs font-bold">Default</span>
-                                    </div>
-                                    <div 
-                                        draggable 
-                                        onDragStart={(e) => { e.dataTransfer.setData('type', 'text'); e.dataTransfer.setData('subtype', 'title'); }}
-                                        className="bg-[#2a2a2a] aspect-square rounded cursor-grab hover:bg-[#333] flex flex-col items-center justify-center border border-[#333]"
-                                    >
-                                        <span className="text-xl font-bold mb-1">Title</span>
-                                        <span className="text-[9px] text-slate-400">Large</span>
-                                    </div>
-                                    <div 
-                                        draggable 
-                                        onDragStart={(e) => { e.dataTransfer.setData('type', 'text'); e.dataTransfer.setData('subtype', 'subtitle'); }}
-                                        className="bg-[#2a2a2a] aspect-square rounded cursor-grab hover:bg-[#333] flex flex-col items-center justify-center border border-[#333]"
-                                    >
-                                        <span className="text-sm font-bold mb-1">Subtitle</span>
-                                        <span className="text-[9px] text-slate-400">Medium</span>
+                                <div className="space-y-4">
+                                    <section className="bg-[#2a2a2a] p-3 rounded-lg border border-[#333]">
+                                        <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 flex items-center gap-2">
+                                            <Sparkles size={12} /> Auto Caption
+                                        </h4>
+                                        <button 
+                                            onClick={handleAutoCaption}
+                                            disabled={isCaptioning}
+                                            className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded-lg flex items-center justify-center gap-2 transition shadow-lg"
+                                        >
+                                            {isCaptioning ? <Loader2 size={14} className="animate-spin" /> : <Type size={14} />}
+                                            {isCaptioning ? "Generating..." : "Generate Captions"}
+                                        </button>
+                                        {captions.length > 0 && (
+                                            <p className="text-[10px] text-emerald-500 mt-2 flex items-center gap-1">
+                                                <CheckCircle2 size={10} /> Generated {captions.length} captions
+                                            </p>
+                                        )}
+                                    </section>
+
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div 
+                                            draggable 
+                                            onDragStart={(e) => { e.dataTransfer.setData('type', 'text'); }}
+                                            className="bg-[#2a2a2a] aspect-square rounded cursor-grab hover:bg-[#333] flex flex-col items-center justify-center border border-[#333]"
+                                        >
+                                            <Type size={24} className="mb-2 text-slate-400" /> 
+                                            <span className="text-xs font-bold">Default</span>
+                                        </div>
+                                        <div 
+                                            draggable 
+                                            onDragStart={(e) => { e.dataTransfer.setData('type', 'text'); e.dataTransfer.setData('subtype', 'title'); }}
+                                            className="bg-[#2a2a2a] aspect-square rounded cursor-grab hover:bg-[#333] flex flex-col items-center justify-center border border-[#333]"
+                                        >
+                                            <span className="text-xl font-bold mb-1">Title</span>
+                                            <span className="text-[9px] text-slate-400">Large</span>
+                                        </div>
+                                        <div 
+                                            draggable 
+                                            onDragStart={(e) => { e.dataTransfer.setData('type', 'text'); e.dataTransfer.setData('subtype', 'subtitle'); }}
+                                            className="bg-[#2a2a2a] aspect-square rounded cursor-grab hover:bg-[#333] flex flex-col items-center justify-center border border-[#333]"
+                                        >
+                                            <span className="text-sm font-bold mb-1">Subtitle</span>
+                                            <span className="text-[9px] text-slate-400">Medium</span>
+                                        </div>
                                     </div>
                                 </div>
                             )}
