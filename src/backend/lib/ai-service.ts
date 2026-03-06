@@ -313,6 +313,89 @@ export class LocalWhisperService implements AIService {
     async transcribeAudio(filePath: string, modelSize: string = 'tiny', onProgress?: (progress: number) => void, onPartial?: (text: string) => void): Promise<any> {
         console.log(`[LocalWhisper] Starting transcription for ${filePath} with model ${modelSize}`);
         
+        // Strategy 0: Python Caption Service (Preferred if running)
+        // Check if we are configured to use the remote python service
+        const captionServiceUrl = process.env.CAPTION_SERVICE_URL || 'http://localhost:8000';
+        
+        try {
+            console.log('[LocalWhisper] Checking Python Caption Service availability...');
+            const axios = require('axios');
+            // Quick health check
+            // Note: The service might not have a /health endpoint, let's try a simple GET or check API docs
+            // Based on API docs, let's just assume it's there if configured.
+            
+            // However, `transcribeAudio` is expected to return the FULL result object { text, segments, ... }
+            // The python service is async (returns job_id).
+            // So we need to: 
+            // 1. Upload file
+            // 2. Poll for status
+            // 3. Download result
+            
+            // Implementation:
+            console.log('[LocalWhisper] Attempting to offload to Python Service:', captionServiceUrl);
+            const FormData = require('form-data');
+            const fs = require('fs');
+
+            const form = new FormData();
+            form.append('file', fs.createReadStream(filePath));
+            form.append('model_size', modelSize);
+
+            // 1. Start Job
+            const startRes = await axios.post(`${captionServiceUrl}/api/caption/start`, form, {
+                headers: { ...form.getHeaders() }
+            });
+            
+            const jobId = startRes.data.job_id;
+            console.log(`[LocalWhisper] Python Service Job Started: ${jobId}`);
+            
+            // 2. Poll for completion
+            let attempts = 0;
+            const maxAttempts = 600; // 10 minutes (assuming 1s interval)
+            
+            while (attempts < maxAttempts) {
+                await new Promise(r => setTimeout(r, 1000));
+                const statusRes = await axios.get(`${captionServiceUrl}/api/caption/${jobId}`);
+                const status = statusRes.data;
+                
+                if (status.status === 'completed') {
+                    console.log('[LocalWhisper] Python Service Job Completed!');
+                    
+                    // 3. Get Result
+                    // The result might be in the status or separate download
+                    // The python service saves it to a file.
+                    // We need to fetch the JSON content.
+                    const resultFilename = status.result_file; // e.g. "uuid.json"
+                    // Or use the download endpoint
+                    
+                    // Let's assume the python service returns the result or we can fetch it
+                    // Based on API docs: GET /api/download/subtitle/{filename}
+                    if (resultFilename) {
+                        const jsonRes = await axios.get(`${captionServiceUrl}/api/download/subtitle/${resultFilename}`);
+                        return jsonRes.data;
+                    }
+                    
+                    return status.result || {}; // Fallback
+                } else if (status.status === 'failed') {
+                    throw new Error(`Python Service Job Failed: ${status.error}`);
+                }
+                
+                // Update progress if callback provided
+                if (onProgress && status.progress) {
+                    onProgress(status.progress);
+                }
+                
+                attempts++;
+            }
+            
+            throw new Error('Python Service Job Timed Out');
+
+        } catch (err: any) {
+            console.log('[LocalWhisper] Python Service skipped/failed:', err.message);
+            console.log('[LocalWhisper] Falling back to local Node strategies...');
+        }
+
+        let transformersError: any = null;
+
         try {
             // Strategy 1: Transformers.js (Node-native, no Python required)
             // Dynamically import to avoid load-time errors if not installed
@@ -320,10 +403,22 @@ export class LocalWhisperService implements AIService {
             return await this.transcribeWithTransformers(filePath, modelSize, onProgress, onPartial);
         } catch (e: any) {
             console.error('[LocalWhisper] Transformers.js failed:', e);
+            transformersError = e;
             console.log('[LocalWhisper] Falling back to Python Whisper CLI...');
+        }
+
+        try {
             // Strategy 2: Python Whisper CLI
             console.log('[LocalWhisper] Trying Strategy 2: Python Whisper CLI');
-            return this.transcribeWithPythonWhisper(filePath, modelSize, onProgress, onPartial);
+            return await this.transcribeWithPythonWhisper(filePath, modelSize, onProgress, onPartial);
+        } catch (whisperError: any) {
+             // Both failed. Construct a detailed error message.
+             let errorMessage = `All transcription strategies failed.\n`;
+             errorMessage += `1. Transformers.js Error: ${transformersError?.message || 'Unknown error'}\n`;
+             errorMessage += `2. Whisper CLI Error: ${whisperError?.message || 'Unknown error'}\n`;
+             errorMessage += `Please ensure dependencies are installed (npm install @xenova/transformers wavefile) OR Python Whisper is available.`;
+             
+             throw new Error(errorMessage);
         }
     }
 
@@ -364,13 +459,34 @@ export class LocalWhisperService implements AIService {
         return new Promise((resolve, reject) => {
              const { Worker } = require('worker_threads');
              const path = require('path');
-             const workerPath = path.join(__dirname, 'whisper.worker.mjs');
+             const fs = require('fs');
+
+             let workerPath = path.join(__dirname, 'whisper.worker.mjs');
              
              // Check if worker file exists, if not we might be in TS context or build artifact issue
              if (!fs.existsSync(workerPath)) {
-                 // Try relative to current file if __dirname is weird in some contexts
-                 // Or try to resolve from build root.
-                 console.warn(`[LocalWhisper] Worker file not found at ${workerPath}.`);
+                 console.warn(`[LocalWhisper] Worker file not found at ${workerPath}. Searching alternatives...`);
+                 
+                 // Alternative 1: Check dist if we are running from source but worker is in dist
+                 // Or if __dirname is weird
+                 const possiblePaths = [
+                     path.join(process.cwd(), 'dist/backend/lib/whisper.worker.mjs'),
+                     path.join(process.cwd(), 'src/backend/lib/whisper.worker.mjs'),
+                     path.resolve(__dirname, '../../../../dist/backend/lib/whisper.worker.mjs')
+                 ];
+                 
+                 for (const p of possiblePaths) {
+                     if (fs.existsSync(p)) {
+                         console.log(`[LocalWhisper] Found worker at ${p}`);
+                         workerPath = p;
+                         break;
+                     }
+                 }
+             }
+             
+             if (!fs.existsSync(workerPath)) {
+                 reject(new Error(`Whisper worker file not found. Checked: ${workerPath}`));
+                 return;
              }
 
              const worker = new Worker(workerPath);
