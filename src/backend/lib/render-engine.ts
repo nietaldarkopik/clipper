@@ -1,5 +1,6 @@
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegPath from 'ffmpeg-static';
+import path from 'path';
 
 // Ensure ffmpeg path is set
 if (ffmpegPath) {
@@ -42,6 +43,26 @@ interface Layer {
     visible: boolean;
     muted?: boolean;
 }
+
+const resolveClipSrc = (src: string) => {
+    let s = src;
+    try {
+        if (s.startsWith('http://') || s.startsWith('https://')) {
+            const u = new URL(s);
+            s = u.pathname || s;
+        }
+    } catch {}
+    if (s.startsWith('/')) {
+        s = s.slice(1);
+    }
+    if (s.startsWith('processed/')) {
+        return path.join(process.cwd(), s);
+    }
+    if (s.startsWith('downloads/')) {
+        return path.join(process.cwd(), s);
+    }
+    return s;
+};
 
 interface RenderOptions {
     width: number;
@@ -104,7 +125,8 @@ export const renderProjectVideo = async (
             // --- Video/Image Handling ---
             if (clip.type === 'video' || clip.type === 'image') {
                 if (clip.src) {
-                    cmd.input(clip.src);
+                    const inputSrc = resolveClipSrc(clip.src);
+                    cmd.input(inputSrc);
                     const idx = inputIndex++;
                     
                     // Video Chain
@@ -194,7 +216,8 @@ export const renderProjectVideo = async (
             // --- Audio Handling (Audio Clips) ---
             else if (clip.type === 'audio') {
                  if (clip.src && !isMuted) {
-                    cmd.input(clip.src);
+                    const inputSrc = resolveClipSrc(clip.src);
+                    cmd.input(inputSrc);
                     const idx = inputIndex++;
                     
                     let aChain = `[${idx}:a]`;
