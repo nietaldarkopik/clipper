@@ -201,7 +201,8 @@ export const generateSpeech = async (text: string, voice?: string) => {
 };
 
 // Caption Service API (Python Backend)
-export const CAPTION_API_URL = 'http://localhost:8000/api';
+// Hosted on drive.unwim.ac.id via Apache Proxy /caption-service/
+export const CAPTION_API_URL = 'https://clipper.drive.unwim.ac.id/caption-service/api';
 const captionApi = axios.create({
     baseURL: CAPTION_API_URL,
     headers: {

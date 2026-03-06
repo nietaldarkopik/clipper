@@ -9,9 +9,14 @@ logger = logging.getLogger(__name__)
 class VideoManager:
     def __init__(self, data_dir=None):
         if data_dir is None:
-            # Default to current directory if not provided
-            data_dir = os.path.join(os.getcwd(), "data")
+            # Default to /data/clipper if not provided, for production server
+            data_dir = os.getenv("CLIPPER_DATA_DIR", "/data/clipper")
         
+        # Ensure we don't try to create root /data/clipper on Windows dev environment unless forced
+        if os.name == 'nt' and data_dir.startswith('/'):
+             # Fallback for Windows local dev
+             data_dir = os.path.join(os.getcwd(), "data")
+
         self.data_dir = data_dir
         self.upload_dir = os.path.join(data_dir, "uploads")
         self.audio_dir = os.path.join(data_dir, "audio")

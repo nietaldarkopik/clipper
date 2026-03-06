@@ -287,64 +287,43 @@ export const ProjectDetail = ({ project: initialProject, onBack, onOpenEditor }:
         }
     };
 
-    const handleAnalyze = async (videoId: string) => {
-        const choice = prompt(
-            "Select Transcription Method:\n\n" +
-            "1. Download from YouTube (Subtitles)\n" +
-            "2. Local Whisper (Tiny - Fastest)\n" +
-            "3. Local Whisper (Base - Balanced)\n" +
-            "4. Local Whisper (Small - Better)\n" +
-            "5. Local Whisper (Medium - Best/Slow)\n",
-            "2"
-        );
+    // State for Analysis Modal
+    const [analyzeModalOpen, setAnalyzeModalOpen] = useState(false);
+    const [analyzeVideoId, setAnalyzeVideoId] = useState<string | null>(null);
+    const [analyzeMethod, setAnalyzeMethod] = useState<'youtube' | 'whisper'>('whisper');
+    const [analyzeModelSize, setAnalyzeModelSize] = useState('tiny');
 
-        if (!choice) return;
+    const openAnalyzeModal = (videoId: string) => {
+        setAnalyzeVideoId(videoId);
+        setAnalyzeModalOpen(true);
+    };
 
-        let method: 'youtube' | 'whisper' = 'whisper';
-        let modelSize = 'tiny';
-
-        switch (choice.trim()) {
-            case '1':
-                method = 'youtube';
-                break;
-            case '2':
-                modelSize = 'tiny';
-                break;
-            case '3':
-                modelSize = 'base';
-                break;
-            case '4':
-                modelSize = 'small';
-                break;
-            case '5':
-                modelSize = 'medium';
-                break;
-            default:
-                // If user types model name directly or something else, default to tiny
-                if (['tiny', 'base', 'small', 'medium'].includes(choice.toLowerCase())) {
-                    modelSize = choice.toLowerCase();
-                } else {
-                    // Default fallback
-                    modelSize = 'tiny';
-                }
-        }
-
-        setProcessingVideos(prev => new Set(prev).add(videoId));
+    const confirmAnalyze = async () => {
+        if (!analyzeVideoId) return;
+        
+        setAnalyzeModalOpen(false);
+        setProcessingVideos(prev => new Set(prev).add(analyzeVideoId));
+        
         try {
-            const res = await analyzeVideo(videoId, modelSize, method);
+            const res = await analyzeVideo(analyzeVideoId, analyzeModelSize, analyzeMethod);
 
             if (res.jobId) {
-                setActiveJob({ id: res.jobId, videoId, type: 'analyze' });
+                setActiveJob({ id: res.jobId, videoId: analyzeVideoId, type: 'analyze' });
             }
         } catch (error) {
             console.error(error);
             alert("Analysis failed");
             setProcessingVideos(prev => {
                 const newSet = new Set(prev);
-                newSet.delete(videoId);
+                newSet.delete(analyzeVideoId);
                 return newSet;
             });
         }
+        setAnalyzeVideoId(null);
+    };
+
+    const handleAnalyze = (videoId: string) => {
+        openAnalyzeModal(videoId);
     };
 
     const handleGenerateSummary = async (videoId: string) => {
@@ -901,6 +880,85 @@ export const ProjectDetail = ({ project: initialProject, onBack, onOpenEditor }:
                         </div>
                     </div>
                 )}
+            
+            {/* Analyze Modal */}
+            {analyzeModalOpen && (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] backdrop-blur-sm">
+                    <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-md p-6 shadow-2xl animate-in fade-in zoom-in duration-200">
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                <Sparkles className="text-indigo-400" size={20} />
+                                Analyze Video
+                            </h3>
+                            <button 
+                                onClick={() => setAnalyzeModalOpen(false)}
+                                className="text-slate-400 hover:text-white"
+                            >
+                                <X size={20} />
+                            </button>
+                        </div>
+
+                        <div className="space-y-4 mb-6">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                                    Method
+                                </label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button
+                                        onClick={() => setAnalyzeMethod('whisper')}
+                                        className={`p-3 rounded-lg border text-sm font-medium transition ${analyzeMethod === 'whisper' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
+                                    >
+                                        Local Whisper AI
+                                    </button>
+                                    <button
+                                        onClick={() => setAnalyzeMethod('youtube')}
+                                        className={`p-3 rounded-lg border text-sm font-medium transition ${analyzeMethod === 'youtube' ? 'bg-indigo-600 border-indigo-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
+                                    >
+                                        YouTube Subtitles
+                                    </button>
+                                </div>
+                            </div>
+
+                            {analyzeMethod === 'whisper' && (
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                                        Model Size
+                                    </label>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        {['tiny', 'base', 'small', 'medium'].map(size => (
+                                            <button
+                                                key={size}
+                                                onClick={() => setAnalyzeModelSize(size)}
+                                                className={`p-2 rounded-lg border text-xs font-medium capitalize transition ${analyzeModelSize === size ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'}`}
+                                            >
+                                                {size}
+                                                <span className="block text-[10px] opacity-60 font-normal mt-0.5">
+                                                    {size === 'tiny' ? 'Fastest' : size === 'base' ? 'Balanced' : size === 'small' ? 'Accurate' : 'Best Quality'}
+                                                </span>
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex gap-3">
+                            <button
+                                onClick={() => setAnalyzeModalOpen(false)}
+                                className="flex-1 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-bold transition"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={confirmAnalyze}
+                                className="flex-1 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold shadow-lg shadow-indigo-500/20 transition"
+                            >
+                                Start Analysis
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
                 {/* Clip Player Modal */}
                 {playingClip && (

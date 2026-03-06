@@ -366,6 +366,13 @@ export class LocalWhisperService implements AIService {
              const path = require('path');
              const workerPath = path.join(__dirname, 'whisper.worker.mjs');
              
+             // Check if worker file exists, if not we might be in TS context or build artifact issue
+             if (!fs.existsSync(workerPath)) {
+                 // Try relative to current file if __dirname is weird in some contexts
+                 // Or try to resolve from build root.
+                 console.warn(`[LocalWhisper] Worker file not found at ${workerPath}.`);
+             }
+
              const worker = new Worker(workerPath);
              
              worker.postMessage({ audioData, modelSize });

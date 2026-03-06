@@ -135,7 +135,17 @@ export const VideoEditor = ({
         try {
             let fileToUpload: File | string = videoClip.filepath || "";
             
-            if (fileToUpload.startsWith('blob:') || fileToUpload.startsWith('http')) {
+            // If it's a local file path, we need to fetch it via the local server to get a Blob
+            // Because the caption service is remote and cannot access local files directly
+            if (typeof fileToUpload === 'string' && !fileToUpload.startsWith('blob:') && !fileToUpload.startsWith('http')) {
+                const url = getVideoUrl(fileToUpload);
+                if (url) {
+                    const res = await fetch(url);
+                    const blob = await res.blob();
+                    const filename = fileToUpload.split(/[\\/]/).pop() || "video.mp4";
+                    fileToUpload = new File([blob], filename, { type: blob.type || "video/mp4" });
+                }
+            } else if (typeof fileToUpload === 'string' && (fileToUpload.startsWith('blob:') || fileToUpload.startsWith('http'))) {
                  const res = await fetch(fileToUpload);
                  const blob = await res.blob();
                  fileToUpload = new File([blob], "video.mp4", { type: "video/mp4" });
